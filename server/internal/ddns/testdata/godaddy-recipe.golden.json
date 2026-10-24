@@ -1,0 +1,32 @@
+{
+  "mode": "custom",
+  "domain": "share.example.com",
+  "provider": "godaddy",
+  "providerZone": "example.com",
+  "recipeVersion": 1,
+  "secrets": {
+    "godaddy_token": "TEST_TOKEN"
+  },
+  "requests": [
+    {
+      "name": "Update share.example.com",
+      "method": "PUT",
+      "url": "https://api.godaddy.com/v1/domains/example.com/records/A/share",
+      "headers": {
+        "Authorization": "Bearer {{.godaddy_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "[{\"data\":\"{{.ipv4}}\",\"ttl\":600}]"
+    },
+    {
+      "name": "Update files.share.example.com",
+      "method": "PUT",
+      "url": "https://api.godaddy.com/v1/domains/example.com/records/A/files.share",
+      "headers": {
+        "Authorization": "Bearer {{.godaddy_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "[{\"data\":\"{{.ipv4}}\",\"ttl\":600}]"
+    }
+  ]
+}

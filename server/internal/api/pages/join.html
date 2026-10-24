@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{template "favicon"}}
+<meta name="robots" content="noindex, nofollow">
+<title>Join this HyperDrop server</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #1d1d1f;
+    --muted: #6e6e73;
+    --paper: #f7f7fa;
+    --card: rgba(255, 255, 255, .82);
+    --field: rgba(29, 29, 31, .045);
+    --line: rgba(29, 29, 31, .09);
+    --shadow: 0 26px 70px rgba(42, 35, 82, .14);
+    --indigo: #6b52f2;
+    --sky: #1cadf8;
+    --ok: #34a853;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #f5f5f7;
+      --muted: #a1a1a8;
+      --paper: #101012;
+      --card: rgba(35, 35, 40, .82);
+      --field: rgba(255, 255, 255, .06);
+      --line: rgba(255, 255, 255, .09);
+      --shadow: 0 28px 80px rgba(0, 0, 0, .42);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 28px;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 18% 12%, rgba(107, 82, 242, .14), transparent 34rem),
+      radial-gradient(circle at 86% 88%, rgba(28, 173, 248, .12), transparent 32rem),
+      var(--paper);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    width: min(100%, 600px);
+    padding: clamp(30px, 6vw, 50px);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 28px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(22px) saturate(130%);
+    -webkit-backdrop-filter: blur(22px) saturate(130%);
+  }
+  .mark {
+    width: 54px;
+    height: 54px;
+    margin-bottom: 22px;
+    filter: drop-shadow(0 9px 18px rgba(83, 73, 211, .24));
+  }
+  .eyebrow {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: transparent;
+    background: linear-gradient(135deg, var(--indigo), var(--sky));
+    background-clip: text;
+    -webkit-background-clip: text;
+  }
+  h1 {
+    margin: 0 0 12px;
+    font-size: clamp(24px, 4.6vw, 32px);
+    line-height: 1.12;
+    letter-spacing: -.03em;
+    overflow-wrap: anywhere;
+  }
+  .lead a.more { color: var(--indigo); text-decoration: none; font-weight: 600; }
+  .lead a.more:hover { text-decoration: underline; }
+  .lead {
+    margin: 0 0 26px;
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1.55;
+  }
+  ol.steps {
+    list-style: none;
+    counter-reset: step;
+    margin: 0;
+    padding: 0;
+  }
+  ol.steps > li {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 22px 46px;
+    line-height: 1.5;
+  }
+  ol.steps > li:last-child { padding-bottom: 0; }
+  ol.steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    font-size: 14px;
+    font-weight: 700;
+    color: #fff;
+    background: linear-gradient(135deg, var(--indigo), var(--sky));
+  }
+  ol.steps > li > strong { display: block; font-size: 17px; margin: 3px 0 4px; letter-spacing: -.01em; }
+  ol.steps > li > p { margin: 0 0 4px; color: var(--muted); font-size: 15px; }
+  ol.steps > li > p:last-child { margin: 12px 0 0; font-size: 13px; }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 11px 18px;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 650;
+    text-decoration: none;
+    color: #fff;
+    background: linear-gradient(135deg, var(--indigo), var(--sky));
+    box-shadow: 0 8px 18px rgba(83, 73, 211, .22);
+  }
+  .btn:hover { filter: brightness(1.05); }
+  .card {
+    margin-top: 10px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--field);
+    overflow: hidden;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row .k { width: 78px; flex: none; color: var(--muted); }
+  .row .v {
+    flex: 1;
+    min-width: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13.5px;
+    overflow-wrap: anywhere;
+  }
+  .row button {
+    flex: none;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--card);
+    cursor: pointer;
+  }
+  .row button:hover { border-color: var(--muted); }
+  .row button.done { color: var(--ok); }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 26px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    width: 100%;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .brand strong { color: var(--ink); font-weight: 650; }
+  .brand a { color: inherit; text-decoration: none; }
+  .brand a:hover { text-decoration: underline; }
+  [hidden] { display: none !important; }
+  @media (max-width: 520px) {
+    body { padding: 16px; }
+    main { padding: 30px 22px; border-radius: 22px; }
+    .mark { width: 46px; height: 46px; }
+    .row { flex-wrap: wrap; }
+    .row .k { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<main>
+  {{template "mark" 54}}
+  <p class="eyebrow">HyperDrop server</p>
+{{if .Join}}
+  <h1 id="title">Use this server with HyperDrop</h1>
+  <p class="lead" id="lead">Get the app, then sign in with the login and password you were sent.</p>
+
+  <ol class="steps">
+    <li>
+      <strong>Get HyperDrop</strong>
+      <a class="btn" href="https://gethyperdrop.com/downloads/" rel="noopener">Download HyperDrop</a>
+    </li>
+    <li>
+      <strong id="join-title">Sign in</strong>
+      <p id="join-hint">Opens HyperDrop with this server filled in; you enter your login and password.</p>
+      <a class="btn" id="open-app" href="{{.ServerLink}}">Open in HyperDrop</a>
+      <div class="card">
+        <div class="row"><span class="k">Server</span><span class="v" id="server">{{.Server}}</span><button type="button" data-copy="server">Copy</button></div>
+        <div class="row" id="row-login" hidden><span class="k">Login</span><span class="v" id="login"></span><button type="button" data-copy="login">Copy</button></div>
+        <div class="row" id="row-password" hidden><span class="k">Password</span><span class="v" id="password">••••••••••••</span><button type="button" id="reveal">Show</button><button type="button" data-copy="password">Copy</button></div>
+      </div>
+      <p>If the button does nothing, HyperDrop is not installed yet: finish step 1.</p>
+    </li>
+  </ol>
+{{else}}
+  <h1>Files on this server are shared through the HyperDrop app</h1>
+  <p class="lead">Read more at <a class="more" href="https://gethyperdrop.com" rel="noopener">gethyperdrop.com</a>.</p>
+{{end}}
+  <div class="brand">Powered by <strong><a class="brand-link" href="https://gethyperdrop.com" rel="noopener">HyperDrop</a></strong></div>
+</main>
+{{if .Join}}
+<script>
+(function () {
+  'use strict';
+  var PREFIX = 'hdjoin1.';
+  var INVITE_PREFIX = 'hdjoin2.';
+  var DEVICE_PREFIX = 'hdjoin3.';
+  var $ = function (id) { return document.getElementById(id); };
+
+  // The invite's code rides in the fragment, which never reaches the server:
+  // this page is the only reader. A hdjoin2 code carries a one-time invite
+  // (the button signs in by spending it; the login and password are in the
+  // message), a hdjoin1 code carries the sign-in itself, a hdjoin3 code is a
+  // device link a signed-in desktop minted for a phone (no password or
+  // token: the desktop approves the sign-in). Each is
+  // presented only for the server it is served from, so a link that names
+  // another server's sign-in under this domain shows nothing and opens
+  // nothing. Without a code the page is the server's front door: the
+  // button opens the app with the server alone.
+  function decode(hash) {
+    if (!hash || hash.charAt(0) !== '#') return null;
+    var code = hash.slice(1);
+    var invite = code.indexOf(INVITE_PREFIX) === 0;
+    var device = code.indexOf(DEVICE_PREFIX) === 0;
+    if ((!invite && !device && code.indexOf(PREFIX) !== 0) || code.length > 4096) return null;
+    var body = code.slice(invite ? INVITE_PREFIX.length : device ? DEVICE_PREFIX.length : PREFIX.length);
+    if (!/^[A-Za-z0-9_-]+$/.test(body)) return null;
+    var b64 = body.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    var json, c;
+    try {
+      var bytes = atob(b64);
+      var buf = new Uint8Array(bytes.length);
+      for (var i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+      json = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+      c = JSON.parse(json);
+    } catch (e) { return null; }
+    if (!c || typeof c.s !== 'string') return null;
+    if (device) {
+      if (typeof c.u !== 'string' || typeof c.i !== 'string' || typeof c.l !== 'string' || !c.u || !c.i || !c.l) return null;
+    } else if (invite) {
+      if (typeof c.t !== 'string' || !c.t) return null;
+    } else if (typeof c.u !== 'string' || typeof c.p !== 'string' || !c.u || !c.p) {
+      return null;
+    }
+    var server;
+    try { server = new URL(c.s); } catch (e) { return null; }
+    if (server.protocol !== 'https:' && server.protocol !== 'http:') return null;
+    if (server.host.toLowerCase() !== location.host.toLowerCase()) return null;
+    return { code: code, server: c.s, user: c.u || '', password: c.p || '', invite: invite, device: device };
+  }
+
+  var invite = decode(location.hash);
+  var values = { server: $('server').textContent };
+  if (invite) {
+    values = { server: invite.server, login: invite.user, password: invite.password };
+    $('title').textContent = invite.device ? 'Sign in on your phone' : 'You\u2019re invited to ' + location.host;
+    $('server').textContent = invite.server;
+    $('join-title').textContent = invite.device ? 'Sign in' : 'Open your invite';
+    $('open-app').href = 'hyperdrop://join?code=' + encodeURIComponent(invite.code);
+    if (invite.device) {
+      $('lead').textContent = 'Open this page on the phone you are signing in, or scan the code with the HyperDrop app.';
+      $('join-hint').textContent = 'Opens HyperDrop on this phone; your desktop approves the sign-in.';
+    } else if (invite.invite) {
+      $('lead').textContent = 'This link signs you in once, as soon as HyperDrop is installed. Your login and password are in the message that sent you here: keep them for your other devices.';
+      $('join-hint').textContent = 'Signs you in on this device; nothing to type.';
+    } else {
+      $('lead').textContent = 'One click signs you in once HyperDrop is installed.';
+      $('join-hint').textContent = 'Fills in the server, your login and your password; you only press Sign In.';
+      $('login').textContent = invite.user;
+      $('row-login').hidden = false;
+      $('row-password').hidden = false;
+      var shown = false;
+      $('reveal').addEventListener('click', function () {
+        shown = !shown;
+        $('password').textContent = shown ? invite.password : '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+        this.textContent = shown ? 'Hide' : 'Show';
+      });
+    }
+  }
+
+  var buttons = document.querySelectorAll('button[data-copy]');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].addEventListener('click', function () {
+      var btn = this;
+      var text = values[btn.getAttribute('data-copy')];
+      if (!text || !navigator.clipboard) return;
+      navigator.clipboard.writeText(text).then(function () {
+        btn.textContent = 'Copied';
+        btn.classList.add('done');
+        setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1400);
+      });
+    });
+  }
+})();
+</script>
+{{end}}
+</body>
+</html>

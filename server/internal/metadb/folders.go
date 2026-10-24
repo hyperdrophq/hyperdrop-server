@@ -1,0 +1,92 @@
+package metadb
+
+import (
+	"database/sql"
+	"fmt"
+
+	"hyperdrop/server/internal/shareid"
+)
+
+// AddFolder records one explicit folder at rel. A folder is always a NEW
+// name: a file at, above or beneath rel, or a folder record at or beneath
+// it, refuses with ErrPathTaken, because a client creating a folder is
+// asking for one that did not exist and a silent success would leave it
+// believing it made the name it typed.
+func (db *DB) AddFolder(shareID, rel string) (d Share, err error) {
+	if !shareid.ValidRelPath(rel) {
+		return Share{}, fmt.Errorf("%w: folder %q", ErrBadRequest, rel)
+	}
+	err = db.commit(func(tx *sql.Tx) error {
+		h, err := readHead(tx, shareID)
+		if err != nil {
+			return err
+		}
+		lo, hi := beneath(rel)
+		var taken bool
+		if err := tx.QueryRow(`SELECT
+			EXISTS(SELECT 1 FROM files WHERE share_id = ?1 AND (path = ?2 OR (path >= ?3 AND path < ?4)
+				OR substr(?2, 1, length(path) + 1) = path || '/'))
+			OR EXISTS(SELECT 1 FROM folders WHERE share_id = ?1 AND (path = ?2 OR (path >= ?3 AND path < ?4)))`,
+			shareID, rel, lo, hi).Scan(&taken); err != nil {
+			return err
+		}
+		if taken {
+			return pathTaken(rel)
+		}
+		var n int
+		if err := tx.QueryRow(`SELECT count(*) FROM folders WHERE share_id = ?`, shareID).Scan(&n); err != nil {
+			return err
+		}
+		if n >= MaxFolders {
+			return ErrTooManyFolders
+		}
+		if _, err := tx.Exec(`INSERT INTO folders(share_id, path) VALUES(?, ?)`, shareID, rel); err != nil {
+			return err
+		}
+		d, err = finishShareWrite(tx, h, shareID, 0)
+		return err
+	})
+	return
+}
+
+// RemoveFolder deletes the folder record at rel and every record beneath it,
+// which is what makes a folder that exists only through its children
+// removable. It refuses while a stored file lies at or beneath rel.
+func (db *DB) RemoveFolder(shareID, rel string) (d Share, err error) {
+	if !shareid.ValidRelPath(rel) {
+		return Share{}, fmt.Errorf("%w: folder %q", ErrBadRequest, rel)
+	}
+	err = db.commit(func(tx *sql.Tx) error {
+		h, err := readHead(tx, shareID)
+		if err != nil {
+			return err
+		}
+		lo, hi := beneath(rel)
+		var n int
+		if err := tx.QueryRow(`SELECT count(*) FROM files WHERE share_id = ? AND (path = ? OR (path >= ? AND path < ?))`,
+			shareID, rel, lo, hi).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			return ErrFolderNotEmpty
+		}
+		res, err := tx.Exec(`DELETE FROM folders WHERE share_id = ? AND (path = ? OR (path >= ? AND path < ?))`,
+			shareID, rel, lo, hi)
+		if err != nil {
+			return err
+		}
+		if k, _ := res.RowsAffected(); k == 0 {
+			return notFound("folder " + rel)
+		}
+		d, err = finishShareWrite(tx, h, shareID, 0)
+		return err
+	})
+	return
+}
+
+// beneath answers the bounds of the paths strictly beneath rel, for a
+// condition `path >= lo AND path < hi`. Under BINARY collation the paths
+// beginning rel+"/" are exactly those at or above it and below rel+"0", '0'
+// being the byte after '/'. The comparison is byte for byte, as every other
+// path comparison is, and the (share_id, path) key serves it.
+func beneath(rel string) (lo, hi string) { return rel + "/", rel + "0" }
