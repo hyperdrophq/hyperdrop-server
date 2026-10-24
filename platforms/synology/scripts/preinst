@@ -1,0 +1,47 @@
+#!/bin/sh
+# Refuse an install or upgrade whose answers the server could not start from,
+# before DSM copies anything. The wizard's "required" validators do not stop
+# Next on DSM 6 or DSM 7, so without this an empty wizard installs a package
+# that never starts, and Package Center answers with an unrelated script
+# error.
+#
+# The install wizard's answers reach a fresh install
+# (SYNOPKG_PKG_STATUS=INSTALL), and the upgrade wizard's reach an upgrade;
+# only a fresh install must have an Admin password and an address, since an
+# upgrade runs on the conf it already has. A terminal install or upgrade
+# (synopkg install) takes its answers as the caller's wizard_* variables:
+# DSM 7 exports the wizard script's defaults over them, and the script prints
+# each answer the caller gave as its default (wizards.py), so the caller's
+# answer reaches this script. Every answer postinst would write is checked on
+# both statuses by answers_refusal in scripts/common, which preupgrade runs
+# first on an upgrade.
+# shellcheck disable=SC2034 # read by scripts/common
+COMMON_OPTIONAL_VAR=1
+# shellcheck source-path=SCRIPTDIR source=common
+. "$(dirname "$0")/common"
+
+reset_log
+reason=$(answers_refusal) || refuse_answers "$reason"
+
+[ "$SYNOPKG_PKG_STATUS" = "INSTALL" ] || exit 0
+
+# A reinstall over kept data: the uninstall kept the data directory, and its
+# conf and admin account still serve, so the wizard may be left empty.
+# kept_confs looks on every volume, since DSM 7 names none to preinst.
+kept=$(kept_confs)
+
+# Package Center defines every wizard field, empty ones included; a terminal
+# install defines wizard_admin_password only when the caller passes it
+# (verified on DSM 6.2.3 and DSM 7.2.2), so that is when the hint says how.
+terminal="From a terminal, pass the answers to synopkg, for example: sudo wizard_admin_password='...' wizard_kind_domain=true wizard_address=share.example.com /usr/syno/bin/synopkg install hyperdrop.spk; then sudo /usr/syno/bin/synopkg start hyperdrop. Step by step: gethyperdrop.com/docs/synology/#terminal"
+if [ -z "$kept" ]; then
+    if [ -z "$wizard_admin_password" ]; then
+        msg="Enter an Admin password: you sign in to HyperDrop with it."
+        [ -n "${wizard_admin_password+set}" ] || msg="$msg $terminal"
+        refuse "$msg"
+    fi
+    if [ -z "$(answer_address)" ]; then
+        refuse "Enter an address: a free name like alice, or your own domain."
+    fi
+fi
+exit 0
