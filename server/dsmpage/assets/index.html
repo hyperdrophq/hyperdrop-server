@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HyperDrop</title>
+<link rel="stylesheet" href="/webman/3rdparty/hyperdrop/index.cgi/assets/page.css">
+<script src="/webman/3rdparty/hyperdrop/index.cgi/assets/page.js" defer></script>
+</head>
+<body>
+<div class="dsm">
+  <header class="dsm-title">
+    <img class="ic" src="/webman/3rdparty/hyperdrop/images/icon_32.png" alt="" width="18" height="18">
+    <span>HyperDrop</span>
+  </header>
+  <div class="dsm-body">
+    <nav class="dsm-nav" role="tablist" aria-label="HyperDrop">
+      <button type="button" role="tab" id="tab-settings" data-panel="settings" aria-controls="panel-settings" aria-selected="true">Settings</button>
+      <button type="button" role="tab" id="tab-storage" data-panel="storage" aria-controls="panel-storage" aria-selected="false">Storage</button>
+      <button type="button" role="tab" id="tab-rescue" data-panel="rescue" aria-controls="panel-rescue" aria-selected="false">Admin rescue</button>
+    </nav>
+    <main class="dsm-main">
+      <div id="banner" class="msg red" role="alert" hidden></div>
+      <p id="loading" class="cap">Loading…</p>
+      <section id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden></section>
+      <section id="panel-storage" role="tabpanel" aria-labelledby="tab-storage" hidden></section>
+      <section id="panel-rescue" role="tabpanel" aria-labelledby="tab-rescue" hidden></section>
+    </main>
+  </div>
+</div>
+</body>
+</html>
