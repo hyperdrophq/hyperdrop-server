@@ -1,0 +1,32 @@
+{
+  "mode": "custom",
+  "domain": "share.example.com",
+  "provider": "gandi",
+  "providerZone": "example.com",
+  "recipeVersion": 1,
+  "secrets": {
+    "gandi_token": "TEST_TOKEN"
+  },
+  "requests": [
+    {
+      "name": "Update share.example.com",
+      "method": "PUT",
+      "url": "https://api.gandi.net/v5/livedns/domains/example.com/records/share/A",
+      "headers": {
+        "Authorization": "Bearer {{.gandi_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"rrset_values\":[\"{{.ipv4}}\"],\"rrset_ttl\":300}"
+    },
+    {
+      "name": "Update files.share.example.com",
+      "method": "PUT",
+      "url": "https://api.gandi.net/v5/livedns/domains/example.com/records/files.share/A",
+      "headers": {
+        "Authorization": "Bearer {{.gandi_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"rrset_values\":[\"{{.ipv4}}\"],\"rrset_ttl\":300}"
+    }
+  ]
+}

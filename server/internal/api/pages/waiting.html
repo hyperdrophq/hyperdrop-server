@@ -1,0 +1,117 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{template "favicon"}}
+<title>{{.Title}} — HyperDrop</title>
+<meta name="robots" content="noindex">
+<style>
+  :root {
+    {{template "brandTokens"}}
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #F2F2F7; --paper: #161618; --hairline: #3A3A3C; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+    max-width: 560px; margin: 0 auto; padding: 4rem 1.2rem 1rem;
+    color: var(--ink); background: var(--paper); text-align: center;
+  }
+  h1 { font-size: 1.25rem; margin: 1.2rem 0 .3rem; letter-spacing: -.01em;
+       overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: .9rem; }
+  .bar { height: 6px; border-radius: 3px; background: var(--hairline);
+         margin: 1.6rem 0 .6rem; overflow: hidden; }
+  .bar > div { height: 100%; width: 0%;
+         background: linear-gradient(90deg, var(--indigo), var(--sky));
+         border-radius: 3px; transition: width .6s ease; }
+  .pct { color: var(--muted); font-size: .85rem;
+         font-family: ui-monospace, Menlo, monospace; }
+  .gone { color: var(--muted); margin-top: 1.6rem; }
+  footer { margin-top: 4rem; padding: .9rem 0; border-top: 1px solid var(--hairline);
+           display: flex; align-items: center; justify-content: center; gap: .45rem;
+           color: var(--muted); font-size: .8rem; }
+  footer strong { color: var(--ink); }
+  footer strong a { color: inherit; text-decoration: none; }
+  footer strong a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+{{template "mark" 44}}
+<h1>{{.Title}}</h1>
+<div class="meta" id="status">{{.Waiting}}</div>
+<div class="meta" id="phase" hidden>Uploading starts when it's ready.</div>
+<div class="bar"><div id="fill"></div></div>
+<div class="pct" id="pct">waiting for the first bytes…</div>
+<footer>{{template "mark" 14}}<span>Shared with <strong><a class="brand-link" href="https://gethyperdrop.com" rel="noopener">HyperDrop</a></strong></span></footer>
+<script>
+const shareID = {{.ID}};
+const slug = {{.Slug}};
+const goneMsg = {{.Gone}};
+const waitingMsg = {{.Waiting}};
+// The sender's own report on a file whose bytes have not started: the
+// fraction for the one file this page waits on, or in whole-share mode the
+// mean over the files being prepared. null when nothing is being prepared,
+// which is the plain upload phase.
+function preparing(st, f) {
+  if (f) return f.preparing ? f.preparing.fraction : null;
+  if (!(st.preparing > 0)) return null;
+  const reps = (st.files || []).filter(x => x.preparing).map(x => x.preparing.fraction);
+  return reps.length ? reps.reduce((a, b) => a + b, 0) / reps.length : 0;
+}
+function show(id, on) { document.getElementById(id).hidden = !on; }
+function human(n) {
+  if (n < 1000) return n + " B";
+  const u = ["KB","MB","GB","TB"]; let i = -1;
+  do { n /= 1000; i++; } while (n >= 1000 && i < u.length - 1);
+  return n.toFixed(1) + " " + u[i];
+}
+async function tick() {
+  try {
+    const res = await fetch("/share/" + shareID + "/status" + (slug ? "?slug=" + encodeURIComponent(slug) : ""), {cache: "no-store"});
+    if (res.status === 404) {
+      // The share existed when this page was served, so vanishing mid-wait
+      // means the sender canceled (or removed) it: say so, and remove the
+      // frozen progress bar that would otherwise look stuck.
+      document.getElementById("status").textContent = goneMsg;
+      document.getElementById("status").className = "gone";
+      document.getElementById("pct").textContent = "";
+      document.querySelector(".bar").style.display = "none";
+      return; // stop polling
+    }
+    if (res.status === 401) { location.reload(); return; } // password gate re-renders
+    const st = await res.json();
+    if (st.unavailable === true) { location.reload(); return; } // source gone: reload shows the unavailable page
+    // The server returns just this slug's entry (a big share sends no
+    // per-file array at all).
+    const f = slug ? (st.file || (st.files || []).find(x => x.slug === slug)) : null;
+    const done = slug ? (f ? f.complete : st.complete) : st.complete;
+    if (done) { location.reload(); return; }
+    // Two phases from one poll: while the sender is still making the file
+    // the bar is its preparing fraction and no byte count is shown; once
+    // bytes move (or no report is fresh) the bar is the upload.
+    const prep = preparing(st, f);
+    if (prep !== null) {
+      const pct = Math.min(100, Math.floor(prep * 100));
+      document.getElementById("fill").style.width = pct + "%";
+      document.getElementById("status").textContent = "The sender is preparing the video… " + pct + "%";
+      show("phase", true); show("pct", false);
+    } else {
+      const bytes = f ? f.bytes : st.uploadedBytes;
+      const size = f ? f.size : st.totalBytes;
+      const pct = Math.min(100, Math.floor(bytes * 100 / Math.max(size, 1)));
+      document.getElementById("fill").style.width = pct + "%";
+      document.getElementById("status").textContent = waitingMsg;
+      document.getElementById("pct").textContent =
+        pct + "% · " + human(bytes) + " of " + human(size);
+      show("phase", false); show("pct", true);
+    }
+  } catch (e) { /* transient network error — keep polling */ }
+  setTimeout(tick, 1500);
+}
+tick();
+</script>
+</body>
+</html>

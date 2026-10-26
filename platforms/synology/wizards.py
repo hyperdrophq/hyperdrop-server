@@ -1,0 +1,356 @@
+#!/usr/bin/env python3
+"""Generates the install, upgrade and uninstall wizards of one DSM generation.
+
+    python3 wizards.py <6|7> <outdir>
+
+WIZARD_UIFILES/install_uifile is the one source of the wizard's JSON, its
+validators included. DSM runs a wizard SCRIPT when the package ships one, so
+the package carries install_uifile.sh and upgrade_uifile.sh, each a POSIX
+shell script that fills a JSON template with the kept settings and prints it
+to $SYNOPKG_TEMP_LOGFILE; the static install_uifile is never shipped.
+uninstall_uifile is written out as the generation's own JSON.
+
+The scripts are self-contained: DSM runs wizard scripts from a temporary
+directory, so they cannot source scripts/common. Template placeholders look
+like %HD_ADDRESS%, which the build's unstamped-placeholder check ignores.
+HYPERDROP_TEST_APPDATA, when set, names a directory whose hyperdrop/ folder
+stands in for every location a script reads the conf from; it is the test
+seam of the end-to-end suite.
+"""
+import copy
+import json
+import os
+import stat
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SRC = os.path.join(HERE, "WIZARD_UIFILES")
+
+PLACEHOLDERS = {
+    "wizard_admin_user": "%HD_ADMIN%",
+    "wizard_kind_free": "%HD_FREE%",
+    "wizard_kind_domain": "%HD_DOMAIN%",
+    "wizard_address": "%HD_ADDRESS%",
+    "wizard_shared_folder": "%HD_FOLDER%",
+    "wizard_http_port": "%HD_HTTP%",
+    "wizard_https_port": "%HD_HTTPS%",
+    "wizard_trusted_proxies": "%HD_PROXY%",
+}
+# Placeholders that stand for a JSON boolean, so they lose their quotes.
+BARE = ("%HD_FREE%", "%HD_DOMAIN%", "%HD_PWBLANK%")
+
+UNINSTALL_DSM7 = (
+    "Shares, users and certificates are kept by default, so reinstalling brings "
+    "everything back. Deleting them also empties the HyperDrop shared folder and "
+    "leaves the empty folder, which Control Panel can delete."
+)
+
+# The update page is titled UPDATE_TITLE and opens with KEPT, because it shows
+# on every update and its fields are filled with the settings already in use.
+# DSM's window title already reads "HyperDrop - Update", so the step title
+# does not repeat it.
+UPDATE_TITLE = "Your settings are kept"
+KEPT = (
+    "Nothing here needs to change: click Next to install the update. Change a "
+    "value only to move HyperDrop to another address, other ports or a proxy."
+)
+KEPT_DSM7 = " You can also change them at any time on the HyperDrop page in DSM's main menu."
+# The shared folder stays on the DSM 7 update page, read-only, because DSM
+# resolves the data-share resource from an update's answers too.
+FOLDER_KEPT = (
+    "The shared folder HyperDrop keeps its shares in. An update cannot change it; "
+    "to move it to another volume, see Storage on the HyperDrop page."
+)
+
+# UPDATE_VIEW runs when the update page activates. It shows the settings as
+# plain read-only values under VIEW, with the explanations and the address
+# kind's radios hidden, until Change settings makes them editable under EDIT.
+# Hidden and read-only fields are still submitted, so Next installs the update
+# with the kept settings. A form that does not validate opens editable. The
+# page's own JSON is the editable page, so a DSM where this script fails shows
+# that page instead. It is appended to the install page's activate script,
+# whose p, f, a, free, s and place it uses.
+VIEW = "Nothing needs to change: click Next to install the update with these settings."
+EDIT = "Change a value only to move HyperDrop to another address, other ports or a proxy, then click Next."
+UPDATE_VIEW = """ if (p.hdEdit === undefined) { p.hdEdit = false; }
+ var lead = p.items.get(0);
+ var tight = function() { if (!free.getValue()) { return; } var cs = window.getComputedStyle(a.el.dom), m = document.createElement('span'); m.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;'; m.style.fontSize = cs.fontSize; m.style.fontFamily = cs.fontFamily; m.style.fontWeight = cs.fontWeight; m.textContent = a.getValue(); document.body.appendChild(m); s.style.left = (a.el.dom.offsetLeft + m.offsetWidth) + 'px'; document.body.removeChild(m); };
+ var mode = function(edit) {
+  p.hdEdit = edit;
+  p.items.each(function(i, n) {
+   if (n === 0) { return; }
+   var name = i.getName ? i.getName() : '';
+   if (i.getXType() === 'syno_displayfield' || i.el.dom.type === 'radio') { i.setVisible(edit); return; }
+   var fixed = name === 'wizard_shared_folder', flat = fixed || !edit;
+   if (!fixed) { i.setReadOnly(!edit); }
+   i.el.setStyle({borderColor: flat ? 'transparent' : '', backgroundColor: flat ? 'transparent' : '', boxShadow: flat ? 'none' : '', paddingLeft: flat ? '0' : ''});
+   if (name === 'wizard_trusted_proxies') { i.el.dom.placeholder = edit ? '' : 'None'; }
+  });
+  var d = lead.el.dom;
+  d.textContent = edit ? __EDIT__ : __VIEW__ + ' ';
+  if (!edit) { var link = document.createElement('a'); link.href = '#'; link.textContent = 'Change settings'; link.onclick = function(e) { e.preventDefault(); mode(true); }; d.appendChild(link); }
+  p.doLayout();
+  if (edit) { place(); } else { tight(); }
+ };
+ setTimeout(function(){ mode(p.hdEdit || !f.isValid()); }, 0);
+"""
+
+
+def update_view(dsm):
+    view = VIEW + (KEPT_DSM7 if dsm == "7" else "")
+    return UPDATE_VIEW.replace("__VIEW__", json.dumps(view)).replace("__EDIT__", json.dumps(EDIT))
+
+
+def load(name):
+    with open(os.path.join(SRC, name)) as f:
+        return json.load(f)
+
+
+def template(dsm, upgrade):
+    steps = copy.deepcopy(load("install_uifile"))
+    for step in steps:
+        keep = []
+        for item in step["items"]:
+            keys = [s["key"] for s in item["subitems"]]
+            if dsm == "6" and "wizard_shared_folder" in keys:
+                continue
+            if upgrade and ("wizard_admin_user" in keys or "wizard_admin_password" in keys):
+                continue
+            keep.append(item)
+        if upgrade:
+            step["step_title"] = UPDATE_TITLE
+            keep.insert(0, {"desc": KEPT + (KEPT_DSM7 if dsm == "7" else "")})
+            body = step["activeate"].rstrip()
+            step["activeate"] = body[:-1].rstrip() + update_view(dsm) + "}"
+        step["items"] = keep
+        for item in keep:
+            for sub in item.get("subitems", []):
+                key = sub["key"]
+                if key in PLACEHOLDERS:
+                    sub["defaultValue"] = PLACEHOLDERS[key]
+                if key == "wizard_admin_password":
+                    sub["validator"]["allowBlank"] = "%HD_PWBLANK%"
+                if key == "wizard_shared_folder" and upgrade:
+                    sub["readOnly"] = True
+                    item["desc"] = FOLDER_KEPT
+    text = json.dumps(steps, indent=2)
+    for p in BARE:
+        text = text.replace('"%s"' % p, p)
+    return text + "\n"
+
+
+PLAIN_FILE = r"""# plain_file answers 0 for a regular file that is neither a link nor linked
+# from anywhere else.
+plain_file() {
+    [ -f "$1" ] && [ ! -L "$1" ] || return 1
+    # shellcheck disable=SC2012 # one file, and ls is on every DSM
+    [ "$(ls -ld "$1" 2>/dev/null | awk '{print $2}')" = "1" ]
+}
+
+"""
+
+# REQUEST shows a pending address change, which the server has not carried
+# out yet, in place of the conf's address.
+REQUEST = r"""    req="${CONF%/*}/address-request"
+    if readable "$req"; then
+        asked=$(head -n 1 "$req")
+        case "$asked" in
+        "free "*)
+            free=true
+            domain=false
+            address=${asked#free }
+            ;;
+        "domain "*)
+            free=false
+            domain=true
+            address=${asked#domain }
+            ;;
+        esac
+    fi
+"""
+
+SCRIPT = r"""#!/bin/sh
+# Prints the __KIND__ wizard of the DSM __DSM__ package to $SYNOPKG_TEMP_LOGFILE:
+# the template below with the kept settings filled in. Generated by
+# platforms/synology/wizards.py from WIZARD_UIFILES/install_uifile.
+#
+# A terminal synopkg install on DSM 7 runs this script too, with the
+# caller's wizard_* answers in its environment, and then exports every
+# default printed here as its wizard_* variable over the caller's own. So an
+# answer the caller gave is the default, ahead of the kept settings and the
+# plain defaults. An empty answer counts as none, except the proxy's: an
+# empty proxy answer clears the proxy. fill keeps only an answer's first
+# line.
+# shellcheck disable=SC2154 # the wizard_* answers come from the caller
+
+__PLAINFILE__
+__CANDIDATES__
+
+# readable answers 0 for a file the wizard may read.
+readable() {
+    __READABLE__
+}
+
+CONF=""
+CONFTEXT=""
+for f in "$@"; do
+    readable "$f" || continue
+    CONF="$f"
+    CONFTEXT=$(cat "$CONF")
+    break
+done
+
+# conf_get KEY prints the value KEY has in the conf, without its quotes. The
+# conf is read once, into CONFTEXT.
+conf_get() {
+    [ -n "$CONFTEXT" ] || return 0
+    printf '%s\n' "$CONFTEXT" | sed -n "s/^$1=//p" | sed -n '1{s/^"\(.*\)"$/\1/;p;}'
+}
+
+# fill VALUE prints VALUE escaped for a JSON string and then for the
+# replacement side of a sed s||| command.
+fill() {
+    printf '%s' "$1" | head -n 1 | tr -d '\000-\037' |
+        sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | sed -e 's/[\\&|]/\\&/g'
+}
+
+# port_of VALUE DEFAULT prints the port of a :NNNN listen address, or DEFAULT.
+port_of() {
+    p=${1##*:}
+    case "$p" in
+    "" | *[!0-9]*) printf '%s' "$2" ;;
+    *) printf '%s' "$p" ;;
+    esac
+}
+
+admin="admin"
+free=true
+domain=false
+address=""
+folder=HyperDrop
+http=5080
+https=5443
+proxy=""
+pwblank=false
+if [ -n "$CONF" ]; then
+    pwblank=true
+    ddns=$(conf_get HYPERDROP_DDNS_NAME)
+    dom=$(conf_get HYPERDROP_DOMAIN)
+    if [ -n "$ddns" ]; then
+        address=$ddns
+    elif [ -n "$dom" ]; then
+        free=false
+        domain=true
+        address=$dom
+    fi
+    kept=$(conf_get HYPERDROP_SHARED_FOLDER)
+    [ -z "$kept" ] || folder=$kept
+    http=$(port_of "$(conf_get HYPERDROP_HTTP_ADDR)" 5080)
+    https=$(port_of "$(conf_get HYPERDROP_HTTPS_ADDR)" 5443)
+    proxy=$(conf_get HYPERDROP_TRUSTED_PROXIES)
+__REQUEST__fi
+
+# The caller's kind follows scripts/common's answer_address: the radio says
+# which, and an address given without one is a domain when it has a dot.
+if [ -n "${wizard_address:-}" ]; then
+    address=$(printf '%s\n' "$wizard_address" | head -n 1)
+    case "$address" in
+    *.*)
+        free=false
+        domain=true
+        ;;
+    *)
+        free=true
+        domain=false
+        ;;
+    esac
+fi
+if [ "${wizard_kind_free-}" = "true" ]; then
+    free=true
+    domain=false
+elif [ "${wizard_kind_domain-}" = "true" ]; then
+    free=false
+    domain=true
+fi
+[ -z "${wizard_admin_user:-}" ] || admin=$wizard_admin_user
+__FOLDERANSWER__[ -z "${wizard_http_port:-}" ] || http=$wizard_http_port
+[ -z "${wizard_https_port:-}" ] || https=$wizard_https_port
+[ -z "${wizard_trusted_proxies+set}" ] || proxy=$wizard_trusted_proxies
+
+sed \
+    -e "s|%HD_FREE%|$free|g" \
+    -e "s|%HD_DOMAIN%|$domain|g" \
+    -e "s|%HD_PWBLANK%|$pwblank|g" \
+    -e "s|%HD_ADMIN%|$(fill "$admin")|g" \
+    -e "s|%HD_ADDRESS%|$(fill "$address")|g" \
+    -e "s|%HD_FOLDER%|$(fill "$folder")|g" \
+    -e "s|%HD_HTTP%|$(fill "$http")|g" \
+    -e "s|%HD_HTTPS%|$(fill "$https")|g" \
+    -e "s|%HD_PROXY%|$(fill "$proxy")|g" > "$SYNOPKG_TEMP_LOGFILE" <<'HD_TEMPLATE'
+__TEMPLATE__HD_TEMPLATE
+"""
+
+FOLDER_ANSWER = '[ -z "${wizard_shared_folder:-}" ] || folder=$wizard_shared_folder\n'
+
+# SEAM wraps the real conf locations in the test seam.
+SEAM = (
+    'if [ -n "${HYPERDROP_TEST_APPDATA:-}" ]; then\n'
+    '    set -- "$HYPERDROP_TEST_APPDATA/hyperdrop/hyperdrop.conf"\n'
+    "else\n"
+    "%s\n"
+    "fi"
+)
+
+
+def candidates(dsm, upgrade):
+    if not upgrade:
+        return SEAM % "    set -- /volume[0-9]*/@appdata/hyperdrop/hyperdrop.conf"
+    if dsm == "7":
+        return SEAM % "    set -- /var/packages/hyperdrop/var/hyperdrop.conf"
+    # The install volume, found the way scripts/common's data_dir finds it.
+    return SEAM % (
+        '    vol="${SYNOPKG_PKGDEST_VOL:-}"\n'
+        '    if [ -z "$vol" ]; then\n'
+        '        dest=$(readlink -f /var/packages/hyperdrop/target 2>/dev/null)\n'
+        "        vol=$(echo \"$dest\" | sed -n 's#^\\(/volume[^/]*\\)/.*#\\1#p')\n"
+        "    fi\n"
+        "    set --\n"
+        '    [ -z "$vol" ] || set -- "$vol/@appdata/hyperdrop/hyperdrop.conf"'
+    )
+
+
+def script(dsm, upgrade):
+    out = SCRIPT.replace("__KIND__", "upgrade" if upgrade else "install")
+    # DSM 6 runs the wizard as root, which reads only a plain file; DSM 7
+    # runs it as the package user, which reads what it can.
+    readable = 'plain_file "$1"' if dsm == "6" else '[ -f "$1" ] && [ -r "$1" ]'
+    out = out.replace("__PLAINFILE__", PLAIN_FILE if dsm == "6" else "")
+    out = out.replace("__READABLE__", readable)
+    out = out.replace("__REQUEST__", REQUEST if upgrade else "")
+    # A DSM 6 wizard has no shared folder, and its script never names one.
+    out = out.replace("__FOLDERANSWER__", FOLDER_ANSWER if dsm == "7" else "")
+    out = out.replace("__DSM__", dsm).replace("__CANDIDATES__", candidates(dsm, upgrade))
+    return out.replace("__TEMPLATE__", template(dsm, upgrade))
+
+
+def main():
+    if len(sys.argv) != 3 or sys.argv[1] not in ("6", "7"):
+        sys.exit("usage: wizards.py <6|7> <outdir>")
+    dsm, out = sys.argv[1], sys.argv[2]
+    os.makedirs(out, exist_ok=True)
+    for name, upgrade in (("install_uifile.sh", False), ("upgrade_uifile.sh", True)):
+        path = os.path.join(out, name)
+        with open(path, "w") as f:
+            f.write(script(dsm, upgrade))
+        os.chmod(path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    uninstall = load("uninstall_uifile")
+    if dsm == "7":
+        for item in uninstall[0]["items"]:
+            item["desc"] = UNINSTALL_DSM7
+    with open(os.path.join(out, "uninstall_uifile"), "w") as f:
+        json.dump(uninstall, f, indent=2)
+        f.write("\n")
+
+
+if __name__ == "__main__":
+    main()
