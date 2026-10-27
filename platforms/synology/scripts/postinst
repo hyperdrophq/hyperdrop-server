@@ -1,0 +1,100 @@
+#!/bin/sh
+# Persist the wizard's answers. Wizard values exist only at install time,
+# arriving as env vars named after their keys; the service reads the conf on
+# every start.
+# shellcheck source-path=SCRIPTDIR source=common
+. "$(dirname "$0")/common"
+mkdir -p "$VAR"
+chmod 700 "$VAR"
+# Every answer written below passes validate_answers here, whatever the
+# status: preinst refuses an answer the same way before DSM copies anything,
+# and a terminal upgrade carries the caller's wizard_* variables too.
+if ! reason=$(validate_answers); then
+    printf '%s\n' "$reason" >&2
+    [ -n "$SYNOPKG_TEMP_LOGFILE" ] && printf '%s\n' "$reason" > "$SYNOPKG_TEMP_LOGFILE"
+    exit 1
+fi
+
+# A field counts as answered when its variable is set and non-empty: Package
+# Center defines every wizard field, empty ones included, and a terminal run
+# defines only what the caller passed. An answered field is merged into the
+# conf line by line; everything unanswered stays as it is.
+#
+# The proxy field is quoted (conf_set) because a list may hold a space after
+# its commas; validate_answers admitted only IP addresses and CIDR ranges, so
+# nothing in it can break out of the quotes when start-stop-status sources
+# the conf. The domain is written lowercase, the only spelling the server takes.
+address=$(answer_address)
+if [ "$SYNOPKG_PKG_STATUS" = "INSTALL" ] && [ -n "$address" ] && ! plain_file "$VAR/hyperdrop.conf"; then
+    # A first install has no conf yet, so the whole conf is written. The
+    # shared folder is chosen here and only here, and only DSM 7 has one.
+    domain=""
+    ddns_name=""
+    case "$address" in
+    "domain "*) domain=${address#domain } ;;
+    *) ddns_name=${address#free } ;;
+    esac
+    {
+        cat <<EOF
+HYPERDROP_DOMAIN=$domain
+HYPERDROP_DDNS_NAME=$ddns_name
+HYPERDROP_HTTP_ADDR=:${wizard_http_port:-5080}
+HYPERDROP_HTTPS_ADDR=:${wizard_https_port:-5443}
+HYPERDROP_TRUSTED_PROXIES="$wizard_trusted_proxies"
+EOF
+        if [ "$DSM_MAJOR" = "7" ] && [ -n "$wizard_shared_folder" ]; then
+            printf 'HYPERDROP_SHARED_FOLDER="%s"\n' "$wizard_shared_folder"
+        fi
+    } | write_var hyperdrop.conf 600 || exit 1
+else
+    # An address answer that differs from the conf's is a request the running
+    # server carries out (it needs the registry and a certificate); the conf's
+    # address lines stay as they are until then. A free name is changed in
+    # the app, never here.
+    current=""
+    if [ -n "$address" ]; then
+        if [ -n "$(conf_get HYPERDROP_DDNS_NAME)" ]; then
+            current="free $(conf_get HYPERDROP_DDNS_NAME)"
+        elif [ -n "$(conf_get HYPERDROP_DOMAIN)" ]; then
+            current="domain $(conf_get HYPERDROP_DOMAIN)"
+        fi
+        case "$current,$address" in
+        "free "*,"free "*)
+            if [ "$current" != "$address" ]; then
+                reason="Change your free name in the HyperDrop app."
+                printf '%s\n' "$reason" >&2
+                [ -n "$SYNOPKG_TEMP_LOGFILE" ] && printf '%s\n' "$reason" > "$SYNOPKG_TEMP_LOGFILE"
+                exit 1
+            fi
+            ;;
+        esac
+    fi
+    [ -z "$wizard_http_port" ] || conf_set HYPERDROP_HTTP_ADDR ":$wizard_http_port" || exit 1
+    [ -z "$wizard_https_port" ] || conf_set HYPERDROP_HTTPS_ADDR ":$wizard_https_port" || exit 1
+    # The proxy is the one field an empty answer changes: a wizard pre-fills
+    # it from the conf, so a defined-but-empty value is the owner clearing it,
+    # while an unset variable (a terminal run that passed none) changes nothing.
+    [ -z "${wizard_trusted_proxies+set}" ] || conf_set HYPERDROP_TRUSTED_PROXIES "$wizard_trusted_proxies" || exit 1
+    if [ -n "$address" ] && [ "$address" != "$current" ]; then
+        printf '%s\n' "$address" | write_var address-request 600 || exit 1
+    elif [ -n "$address" ] && plain_file "$VAR/address-request"; then
+        # The conf already holds this address: an earlier request is stale.
+        rm -f "$VAR/address-request"
+    fi
+fi
+# The admin seeds are one-shot: the server reads the password seed on its
+# first boot (HYPERDROP_ADMIN_PASSWORD_FILE) and removes it once the volume
+# has an administrator, and the start script then removes the username seed
+# beside it (empty means "admin" to the server).
+if [ -n "$wizard_admin_password" ]; then
+    printf '%s' "$wizard_admin_password" | write_var admin-password.seed 600 || exit 1
+    printf '%s' "${wizard_admin_user:-}" | write_var admin-user.seed 600 || exit 1
+fi
+# The service runs as the package user while this script may run as root
+# (on DSM 6 it always does: the DSM 6 privilege file runs the install scripts
+# as root so they can create the data directory in @appdata). What it wrote
+# must end up READABLE by the service, or its dot-source of the conf aborts
+# the start script.
+write_port_conf
+own_data
+exit 0
