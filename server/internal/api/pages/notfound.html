@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{template "favicon"}}
+<meta name="robots" content="noindex, nofollow">
+<title>Page not found — HyperDrop</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --ink: #1d1d1f;
+    --muted: #6e6e73;
+    --paper: #f7f7fa;
+    --card: rgba(255, 255, 255, .82);
+    --line: rgba(29, 29, 31, .09);
+    --shadow: 0 26px 70px rgba(42, 35, 82, .14);
+    --indigo: #6b52f2;
+    --sky: #1cadf8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #f5f5f7;
+      --muted: #a1a1a8;
+      --paper: #101012;
+      --card: rgba(35, 35, 40, .82);
+      --line: rgba(255, 255, 255, .09);
+      --shadow: 0 28px 80px rgba(0, 0, 0, .42);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 28px;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 18% 12%, rgba(107, 82, 242, .14), transparent 34rem),
+      radial-gradient(circle at 86% 88%, rgba(28, 173, 248, .12), transparent 32rem),
+      var(--paper);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    width: min(100%, 560px);
+    padding: clamp(34px, 7vw, 58px);
+    text-align: center;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 28px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(22px) saturate(130%);
+    -webkit-backdrop-filter: blur(22px) saturate(130%);
+  }
+  .mark {
+    width: 54px;
+    height: 54px;
+    margin: 0 auto 30px;
+    filter: drop-shadow(0 9px 18px rgba(83, 73, 211, .24));
+  }
+  .code {
+    margin: 0 0 8px;
+    font-size: clamp(68px, 17vw, 112px);
+    font-weight: 750;
+    line-height: .88;
+    letter-spacing: -.075em;
+    padding-right: .075em;
+    color: transparent;
+    background: linear-gradient(135deg, var(--indigo), var(--sky));
+    background-clip: text;
+    -webkit-background-clip: text;
+  }
+  h1 {
+    margin: 24px 0 12px;
+    font-size: clamp(25px, 5vw, 34px);
+    line-height: 1.12;
+    letter-spacing: -.035em;
+  }
+  p {
+    max-width: 390px;
+    margin: 0 auto;
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1.55;
+  }
+  .hint {
+    margin-top: 25px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 18px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .brand strong { color: var(--ink); font-weight: 650; }
+  .brand a { color: inherit; text-decoration: none; }
+  .brand a:hover { text-decoration: underline; }
+  @media (max-width: 520px) {
+    body { padding: 16px; }
+    main { padding: 34px 24px; border-radius: 22px; }
+    .mark { width: 46px; height: 46px; margin-bottom: 26px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <svg class="mark" viewBox="0 0 640 640" role="img" aria-label="HyperDrop">
+    <rect width="640" height="640" fill="#712dff"/>
+    <path fill="#fff" d="M416.82 187.3L510.1 187.3L566.7 274.18L416.5 452.7L291.87 452.7L318.01 421.52L401.98 421.52L527.95 271.81L493.2 218.48L431.4 218.48L364.46 298.68L254.51 298.68L280.93 267.5L349.87 267.5Z"/>
+    <path fill="#fff" d="M223.5 187.3L348.13 187.3L322.06 218.48L238.02 218.48L112.05 368.19L146.8 421.52L208.6 421.52L275.54 341.32L385.38 341.32L359.11 372.5L290.13 372.5L223.18 452.7L129.9 452.7L73.3 365.82Z"/>
+  </svg>
+  <div class="code" aria-hidden="true">404</div>
+  <h1>This link isn’t here</h1>
+  <p>It may have expired, been removed, or the address may be incomplete.</p>
+  <div class="hint">Check the address, or ask the sender for a fresh link.</div>
+  <div class="brand">Powered by <strong><a class="brand-link" href="https://gethyperdrop.com" rel="noopener">HyperDrop</a></strong></div>
+</main>
+</body>
+</html>
