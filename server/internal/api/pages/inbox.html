@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{template "favicon"}}
+<title>{{.Name}}</title>
+<style>
+:root { {{template "brandTokens"}}
+        --ok:#34A853; --bad:#D93025; }
+@media (prefers-color-scheme: dark) {
+  :root { --ink:#F5F5F7; --paper:#1C1C1E; --muted:#98989D; --hairline:#3A3A3C; }
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--paper); color:var(--ink);
+       font:16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+main { max-width:560px; margin:0 auto; padding:48px 20px 60px; }
+h1 { font-size:22px; margin:0 0 6px; }
+.note { color:var(--muted); margin:0 0 26px; white-space:pre-line; }
+.closed { border:1px solid var(--hairline); border-radius:12px; padding:28px 22px;
+          text-align:center; color:var(--muted); }
+#zone { border:2px dashed var(--hairline); border-radius:14px; padding:44px 20px;
+        text-align:center; color:var(--muted); cursor:pointer; transition:border-color .15s; }
+#zone.hot { border-color:var(--indigo); color:var(--ink); }
+#zone strong { display:block; color:var(--ink); font-size:17px; margin-bottom:4px; }
+#rows { margin-top:18px; }
+.row { display:flex; align-items:center; gap:12px; padding:10px 2px;
+       border-bottom:1px solid var(--hairline); font-size:14px; }
+.row .fn { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.row .st { color:var(--muted); flex-shrink:0; min-width:64px; text-align:right; }
+.row .st.ok { color:var(--ok); }
+.row .st.bad { color:var(--bad); }
+.bar { width:110px; height:5px; border-radius:3px; background:var(--hairline);
+       overflow:hidden; flex-shrink:0; }
+.bar i { display:block; height:100%; width:0; background:var(--sky); }
+footer { margin-top:34px; color:var(--muted); font-size:12px; text-align:center; }
+footer strong { color:var(--ink); font-weight:600; }
+footer a { color:inherit; text-decoration:none; }
+footer a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+<main>
+<h1>{{.Name}}</h1>
+{{if .Note}}<p class="note">{{.Note}}</p>{{end}}
+{{if .Closed}}
+<div class="closed">This Receive Inbox is no longer accepting files.</div>
+{{else if .Full}}
+<div class="closed">This Receive Inbox is full: it holds as many files as it takes.</div>
+{{else}}
+<div id="zone">
+  <strong>Drop files here</strong>
+  or click to choose
+</div>
+<input id="pick" type="file" multiple hidden>
+<div id="rows"></div>
+{{end}}
+<footer>Powered by <strong><a class="brand-link" href="https://gethyperdrop.com" rel="noopener">HyperDrop</a></strong>. Files go directly to the person who sent this link.</footer>
+</main>
+{{if not (or .Closed .Full)}}
+<script>
+"use strict";
+var REQ = "{{.ID}}";
+var MAX_BYTES = {{.MaxBytes}};
+var LIMITS = "{{.Limits}}";
+var zone = document.getElementById("zone");
+var pick = document.getElementById("pick");
+var rows = document.getElementById("rows");
+var queue = [], busy = false;
+// A busy server (429, a slot past its bound), an upload that stalled (408)
+// and a dropped connection are retried, each after a longer wait.
+var RETRIES = 4;
+
+zone.addEventListener("click", function () { pick.click(); });
+pick.addEventListener("change", function () { addFiles(pick.files); pick.value = ""; });
+zone.addEventListener("dragover", function (e) { e.preventDefault(); zone.classList.add("hot"); });
+zone.addEventListener("dragleave", function () { zone.classList.remove("hot"); });
+zone.addEventListener("drop", function (e) {
+  e.preventDefault(); zone.classList.remove("hot");
+  addFiles(e.dataTransfer.files);
+});
+
+function addFiles(list) {
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i];
+    var row = document.createElement("div");
+    row.className = "row";
+    var fn = document.createElement("span"); fn.className = "fn"; fn.textContent = f.name;
+    var bar = document.createElement("span"); bar.className = "bar";
+    var fill = document.createElement("i"); bar.appendChild(fill);
+    var st = document.createElement("span"); st.className = "st"; st.textContent = "waiting";
+    row.appendChild(fn); row.appendChild(bar); row.appendChild(st);
+    rows.appendChild(row);
+    if (MAX_BYTES > 0 && f.size > MAX_BYTES) {
+      // Refused here, before a byte moves: the server would refuse it too,
+      // after the browser had sent it.
+      var over = "too big: " + Math.ceil(f.size / 1048576) + " MB, this inbox takes " + LIMITS;
+      st.textContent = over; st.className = "st bad"; st.title = over;
+      continue;
+    }
+    queue.push({ file: f, fill: fill, st: st, tries: 0 });
+  }
+  pump();
+}
+
+function pump() {
+  if (busy || queue.length === 0) return;
+  busy = true;
+  send(queue.shift());
+}
+
+// retry sends job again after a wait that grows with each try, starting from
+// the server's Retry-After when it named one, and answers false once the
+// tries are spent. The queue waits with it: the page sends one file at a
+// time.
+function retry(job, after, why) {
+  if (job.tries >= RETRIES) return false;
+  job.tries++;
+  var secs = (after > 0 ? after : 10) * job.tries + Math.floor(Math.random() * 3);
+  job.fill.style.width = "0";
+  job.st.className = "st";
+  job.st.textContent = why + ", retrying in " + secs + " s";
+  job.st.title = "";
+  setTimeout(function () { send(job); }, secs * 1000);
+  return true;
+}
+
+function fail(job, msg) {
+  job.st.textContent = msg; job.st.className = "st bad"; job.st.title = msg;
+  busy = false; pump();
+}
+
+function send(job) {
+  var xhr = new XMLHttpRequest();
+  xhr.open("PUT", "/receive/" + REQ + "/files/" + encodeURIComponent(job.file.name));
+  xhr.upload.onprogress = function (e) {
+    if (e.lengthComputable) {
+      job.fill.style.width = Math.round(e.loaded * 100 / e.total) + "%";
+      job.st.textContent = Math.round(e.loaded * 100 / e.total) + "%";
+    }
+  };
+  xhr.onload = function () {
+    if (xhr.status === 201) {
+      job.fill.style.width = "100%";
+      job.st.textContent = "done"; job.st.className = "st ok";
+      busy = false; pump();
+      return;
+    }
+    if (xhr.status === 429 || xhr.status === 408) {
+      var busyServer = xhr.status === 429;
+      if (retry(job, parseInt(xhr.getResponseHeader("Retry-After"), 10), busyServer ? "busy" : "stalled")) return;
+      fail(job, busyServer ? "failed: the server is busy, try again in a moment"
+                           : "failed: the upload stalled, try again");
+      return;
+    }
+    if (xhr.status === 401) {
+      fail(job, "reload page");
+    } else if (xhr.status === 403) {
+      fail(job, "closed");
+    } else {
+      var msg = "failed";
+      try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+      fail(job, msg);
+    }
+  };
+  xhr.onerror = function () {
+    // A network error has no status to show: the connection dropped, or the
+    // server answered before reading the whole body (busy, or past the
+    // inbox's limits) and closed it.
+    if (retry(job, 0, "connection lost")) return;
+    fail(job, "failed: the connection dropped or the server was busy, try again" +
+      (LIMITS ? " (this inbox takes " + LIMITS + ")" : ""));
+  };
+  job.st.textContent = "0%";
+  xhr.send(job.file);
+}
+</script>
+{{end}}
+</body>
+</html>
