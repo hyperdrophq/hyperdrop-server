@@ -1,0 +1,326 @@
+package metadb
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"hyperdrop/server/internal/shareid"
+)
+
+// PublishCommit is one staged file a publish makes live: its relpath and the
+// size, hash and type of the bytes that wait to be renamed into place.
+type PublishCommit struct {
+	Path         string
+	Size         int64
+	SHA256, Mime string
+}
+
+// PublishResult answers a publish: Files holds each committed path as the
+// share spells it, with its slug, in commit order; Deleted holds the rows
+// that went, in delete order, so the caller can remove their bytes and tiles.
+type PublishResult struct {
+	Files   []File
+	Deleted []File
+}
+
+// ErrPublishConflict is a publish refused because the share no longer holds
+// what the client saw: a base hash that differs, or a path to replace or
+// delete that is gone, pending or not a stored file. Conflicts names every
+// such path, sorted; nothing was changed.
+type ErrPublishConflict struct {
+	Conflicts []string
+}
+
+func (e *ErrPublishConflict) Error() string {
+	return "the share changed since it was read: " + strings.Join(e.Conflicts, ", ")
+}
+
+// PublishFiles decides a whole publish in one transaction: it re-checks base
+// against the rows, spells every path, refuses a text share and a path that a
+// folder, a linked entry or another commit already holds, checks the owner's
+// quota against the net change (new bytes, less the bytes of the rows replaced
+// and deleted), then inserts the new rows with fresh slugs, updates the
+// replaced rows keeping slug and addedAt, and deletes the deleted rows with
+// their gallery rows. The share is touched once and one change is recorded.
+// base maps a replaced or deleted path to the hash the client last saw, and
+// a path the client expects to be new to "": a row at that exact path, as
+// sent, is a conflict, while a row the path reaches only by folding its
+// case is replaced. The caller moves the bytes only after this returns without
+// error.
+func (db *DB) PublishFiles(shareID string, commits []PublishCommit, deletes []string, base map[string]string) (res PublishResult, err error) {
+	if len(commits) == 0 && len(deletes) == 0 {
+		return PublishResult{}, fmt.Errorf("%w: a publish with nothing in it", ErrBadRequest)
+	}
+	for _, c := range commits {
+		if !shareid.ValidRelPath(c.Path) || c.Size < 0 {
+			return PublishResult{}, fmt.Errorf("%w: publish %q", ErrBadRequest, c.Path)
+		}
+	}
+	for _, p := range deletes {
+		if !shareid.ValidRelPath(p) {
+			return PublishResult{}, fmt.Errorf("%w: delete %q", ErrBadRequest, p)
+		}
+	}
+	err = db.commit(func(tx *sql.Tx) error {
+		res = PublishResult{}
+		h, err := readHead(tx, shareID)
+		if err != nil {
+			return err
+		}
+		if h.text {
+			return ErrTextShare
+		}
+
+		// Spell every path first: a path folding onto a stored one takes its
+		// spelling, and two paths naming one file are one path.
+		spelled := make([]string, len(commits))
+		inCommit := map[string]bool{}
+		canon := map[string][]string{}
+		for i, c := range commits {
+			if spelled[i], err = db.spell(tx, shareID, c.Path, ""); err != nil {
+				return err
+			}
+			if db.folds() {
+				spelled[i] = db.agreeWithBatch(shareID, spelled[i], canon)
+			}
+			if inCommit[spelled[i]] {
+				return pathTaken(spelled[i])
+			}
+			inCommit[spelled[i]] = true
+		}
+		dels := make([]string, len(deletes))
+		seenDel := map[string]bool{}
+		for i, p := range deletes {
+			if dels[i], err = db.spell(tx, shareID, p, ""); err != nil {
+				return err
+			}
+			if inCommit[dels[i]] || seenDel[dels[i]] {
+				return fmt.Errorf("%w: %q is named twice in one publish", ErrBadRequest, p)
+			}
+			seenDel[dels[i]] = true
+		}
+
+		// Decide base and existence for every replaced or deleted path.
+		var conflicts []string
+		old := map[string]File{}
+		baseOf := func(orig, spelledPath string) (string, bool) {
+			if v, ok := base[spelledPath]; ok {
+				return v, true
+			}
+			v, ok := base[orig]
+			return v, ok
+		}
+		var replacedBytes, deletedBytes, newBytes int64
+		for i, c := range commits {
+			newBytes += c.Size
+			f, err := scanFile(tx, shareID, spelled[i])
+			if errors.Is(err, ErrNotFound) {
+				if want, ok := baseOf(c.Path, spelled[i]); ok && want != "" {
+					conflicts = append(conflicts, spelled[i])
+				}
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			old[spelled[i]] = f
+			if want, ok := baseOf(c.Path, spelled[i]); ok {
+				// "" speaks of the path exactly as sent: a row reached only
+				// by folding its case is replaced with no base check.
+				if want == "" && spelled[i] == c.Path {
+					conflicts = append(conflicts, spelled[i])
+					continue
+				}
+				if want != "" && (f.Pending || f.SHA256 != want) {
+					conflicts = append(conflicts, spelled[i])
+					continue
+				}
+			}
+			if !f.Pending {
+				replacedBytes += f.Size
+			}
+		}
+		for i, p := range dels {
+			f, err := scanFile(tx, shareID, p)
+			if errors.Is(err, ErrNotFound) || (err == nil && f.Pending) {
+				conflicts = append(conflicts, p)
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if want, ok := baseOf(deletes[i], p); ok && f.SHA256 != want {
+				conflicts = append(conflicts, p)
+				continue
+			}
+			old[p] = f
+			deletedBytes += f.Size
+		}
+		if len(conflicts) > 0 {
+			sort.Strings(conflicts)
+			return &ErrPublishConflict{Conflicts: conflicts}
+		}
+
+		for _, p := range spelled {
+			// A commit beneath another commit: some ancestor of p is committed.
+			for i := 0; i < len(p); i++ {
+				if p[i] == '/' && inCommit[p[:i]] {
+					return pathTaken(p[:i])
+				}
+			}
+			if err := checkPublishPath(tx, shareID, p, seenDel); err != nil {
+				return err
+			}
+		}
+
+		if net := newBytes - replacedBytes - deletedBytes; net > 0 {
+			var quota, used int64
+			if err := tx.QueryRow(`SELECT quota_bytes FROM users WHERE username = ?`, h.owner).Scan(&quota); err != nil {
+				return err
+			}
+			if quota > 0 {
+				if err := tx.QueryRow(`SELECT coalesce((SELECT bytes FROM owner_stats WHERE owner = ?), 0)`, h.owner).Scan(&used); err != nil {
+					return err
+				}
+				if used+net > quota {
+					return fmt.Errorf("%w: the account's quota is %d bytes", ErrQuota, quota)
+				}
+			}
+		}
+
+		now := time.Now()
+		ns := toNS(now)
+		for i, c := range commits {
+			sha := nullIfEmpty(c.SHA256)
+			if f, ok := old[spelled[i]]; ok {
+				added := toNSPtr(f.AddedAt)
+				if added == nil {
+					added = ns
+				}
+				_, err = tx.Exec(`UPDATE files SET size = ?, sha256 = ?, mime = ?, pending = 0, committed_at = ?, added_at = ?, upload_session = ''
+					WHERE share_id = ? AND path = ?`, c.Size, sha, c.Mime, ns, added, shareID, spelled[i])
+			} else {
+				_, err = tx.Exec(`INSERT INTO files(share_id, path, slug, size, sha256, mime, pending, committed_at, added_at, upload_session, fold_key)
+					VALUES(?, ?, ?, ?, ?, ?, 0, ?, ?, '', ?)`, shareID, spelled[i], newSlug(), c.Size, sha, c.Mime, ns, ns, foldKey(spelled[i]))
+			}
+			if err != nil {
+				return err
+			}
+		}
+		for _, p := range dels {
+			if _, err := tx.Exec(`DELETE FROM files WHERE share_id = ? AND path = ?`, shareID, p); err != nil {
+				return err
+			}
+			res.Deleted = append(res.Deleted, old[p])
+		}
+		if len(dels) > 0 {
+			if err := pruneGalleryRows(tx, shareID); err != nil {
+				return err
+			}
+			if err := clearDanglingEntry(tx, shareID); err != nil {
+				return err
+			}
+		}
+		if err := touch(tx, shareID, now); err != nil {
+			return err
+		}
+		if err := recordChange(tx, h.owner, shareID, false, now); err != nil {
+			return err
+		}
+		for _, p := range spelled {
+			f, err := scanFile(tx, shareID, p)
+			if err != nil {
+				return err
+			}
+			res.Files = append(res.Files, f)
+		}
+		return nil
+	})
+	if err != nil {
+		res = PublishResult{}
+	}
+	return
+}
+
+// checkPublishPath refuses (ErrPathTaken) a commit path that a folder record,
+// a linked entry of the share or a stored file's directory structure already
+// holds: the path itself or a folder record or linked entry at or beneath it,
+// stored files beneath it, or one of its ancestors a stored file or a linked entry. A stored
+// file at the path itself is a replace, not a collision. A stored file the
+// same publish deletes (deleted) is not in the way.
+func checkPublishPath(tx *sql.Tx, shareID, p string, deleted map[string]bool) error {
+	lo, hi := beneath(p)
+	var taken bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM folders WHERE share_id = ?1 AND (path = ?2 OR (path >= ?3 AND path < ?4)))
+		OR EXISTS(SELECT 1 FROM linked_slugs WHERE share_id = ?1 AND (rel = ?2 OR (rel >= ?3 AND rel < ?4)))`,
+		shareID, p, lo, hi).Scan(&taken); err != nil {
+		return err
+	}
+	if taken {
+		return pathTaken(p)
+	}
+	for i := 0; i < len(p); i++ {
+		if p[i] != '/' {
+			continue
+		}
+		var linked bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM linked_slugs WHERE share_id = ? AND rel = ?)`, shareID, p[:i]).Scan(&linked); err != nil {
+			return err
+		}
+		if linked {
+			return pathTaken(p[:i])
+		}
+		if _, err := scanFile(tx, shareID, p[:i]); err == nil {
+			if !deleted[p[:i]] {
+				return pathTaken(p[:i])
+			}
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+	}
+	rows, err := tx.Query(`SELECT path FROM files WHERE share_id = ? AND path >= ? AND path < ?`, shareID, lo, hi)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var q string
+		if err := rows.Scan(&q); err != nil {
+			return err
+		}
+		if !deleted[q] {
+			return pathTaken(p)
+		}
+	}
+	return rows.Err()
+}
+
+// agreeWithBatch spells p the way earlier commits of the same batch spelled
+// the names it folds onto: canon maps a prefix's fold key to the spellings
+// already chosen for it. On a volume that folds case, Dir/x and dir/y land in
+// one folder, and A.txt and a.txt are one path.
+func (db *DB) agreeWithBatch(shareID, p string, canon map[string][]string) string {
+	out := ""
+	segs := strings.Split(p, "/")
+	for _, seg := range segs {
+		cur := joinPath(out, seg)
+		key := foldKey(cur)
+		chosen := ""
+		for _, c := range canon[key] {
+			if db.same(shareID, c, cur) {
+				chosen = c
+				break
+			}
+		}
+		if chosen == "" {
+			canon[key] = append(canon[key], cur)
+			chosen = cur
+		}
+		out = chosen
+	}
+	return out
+}

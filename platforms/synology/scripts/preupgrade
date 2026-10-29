@@ -1,0 +1,16 @@
+#!/bin/sh
+# Data lives outside the target dir, so an upgrade replaces only the binary
+# and nothing is saved here. The upgrade's answers are checked here, the way
+# preinst checks them: DSM 7 runs preuninst and postuninst between this
+# script and preinst, so a refusal in preinst leaves the package uninstalled,
+# while a refusal here leaves the installed version in place. DSM 6 stops the
+# package before this script and does not start it again after a refusal, so
+# the refusal tells the owner to start it.
+# shellcheck disable=SC2034 # read by scripts/common
+COMMON_OPTIONAL_VAR=1
+# shellcheck source-path=SCRIPTDIR source=common
+. "$(dirname "$0")/common"
+
+reset_log
+reason=$(answers_refusal) || refuse_answers "$reason"
+exit 0

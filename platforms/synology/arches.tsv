@@ -1,0 +1,99 @@
+# The Synology package table: the DSM generations HyperDrop builds for, the
+# package families, and every Synology PLATFORM that maps onto a family. The
+# one source for build-spk.sh (what each .spk is built for), build-feed.sh
+# (which feeds exist), the maps in hyperdrop-site.nginx.conf (what Package
+# Center is answered) and the build list on website/downloads/synology/index.html
+# (which build the page selects). arches.py reads it and rewrites the
+# generated blocks; site:check runs it and diffs.
+#
+# Tab-separated. Blank lines and lines starting with # are ignored.
+#
+# dsm  <major>  <os_min_ver>
+#   A DSM generation a package is built for. DSM refuses a package whose
+#   os_min_ver major differs from its own (install error 261), so every
+#   generation gets its own .spk per family, stamped with this os_min_ver.
+#
+# family  <name>  <GOARCH>  <GOARM or ->  <majors>  <DSM 7 INFO arch>  <label>
+#   name is the package's label (hyperdrop-<version>-dsm<major>-<name>.spk and
+#   feed/dsm<major>-<name>.json). majors is a comma-separated list of the dsm
+#   generations the family is built for. The DSM 7 INFO arch is the INFO
+#   file's arch value there: a space-separated list of Synology package
+#   arches, * for every platform row of the family, or - for a family DSM 7
+#   never gets. Synology calls the 64-bit ARM package family armv8; several
+#   older 32-bit ARM platforms have their own package arch rather than
+#   belonging to the armv7 family, but run the same GOARM=7 binary. DSM 6
+#   matches INFO arch against the box's platform name, so its packages always
+#   list every platform row of the family. label is what the download page
+#   calls the processor.
+#
+# platform  <name>  <family>
+#   Package Center asks by PLATFORM, not by CPU: a DS1522+ asks with
+#   arch=r1000, never arch=x86_64 (measured against DSM 7.4.1-90080). Names
+#   from SynoCommunity's toolchain set. x86 and evansport only ever ran DSM 6;
+#   a DSM 7 box never asks with them. 88f6281 (ARMv5, kernel 2.6.32, older
+#   than any Go runtime supports) and ppc853x/qoriq (PowerPC, which Go cannot
+#   build for in 32 bits) are deliberately absent, since no package is built
+#   for them.
+
+dsm	7	7.0-40000
+dsm	6	6.2-23739
+
+family	x86_64	amd64	-	7,6	x86_64	Intel / AMD 64-bit
+family	aarch64	arm64	-	7,6	armv8	ARM 64-bit
+family	armv7	arm	7	7,6	*	ARM 32-bit
+family	i686	386	-	6	-	Intel 32-bit
+
+platform	apollolake	x86_64
+platform	avoton	x86_64
+platform	braswell	x86_64
+platform	broadwell	x86_64
+platform	broadwellnk	x86_64
+platform	broadwellnkv2	x86_64
+platform	broadwellntb	x86_64
+platform	broadwellntbap	x86_64
+platform	bromolow	x86_64
+platform	cedarview	x86_64
+platform	coffeelake	x86_64
+platform	denverton	x86_64
+platform	dockerx64	x86_64
+platform	epyc7002	x86_64
+platform	epyc7003	x86_64
+platform	epyc7003ntb	x86_64
+platform	geminilake	x86_64
+platform	geminilakenk	x86_64
+platform	grantley	x86_64
+platform	icelaked	x86_64
+platform	kvmx64	x86_64
+platform	purley	x86_64
+platform	r1000	x86_64
+platform	r1000nk	x86_64
+platform	skylaked	x86_64
+platform	v1000	x86_64
+platform	v1000nk	x86_64
+platform	x64	x86_64
+platform	x86	x86_64
+platform	x86_64	x86_64
+
+platform	aarch64	aarch64
+platform	armada37xx	aarch64
+platform	rtd1296	aarch64
+platform	rtd1619	aarch64
+platform	rtd1619b	aarch64
+
+platform	alpine	armv7
+platform	alpine4k	armv7
+platform	armada370	armv7
+platform	armada375	armv7
+platform	armada38x	armv7
+platform	armadaxp	armv7
+platform	armv7	armv7
+platform	comcerto2k	armv7
+platform	cypress	armv7
+platform	dakota	armv7
+platform	hawkeye	armv7
+platform	hi3535	armv7
+platform	ipq806x	armv7
+platform	monaco	armv7
+platform	northstarplus	armv7
+
+platform	evansport	i686
