@@ -1,0 +1,1 @@
+{"port-config":{"protocol-file":"port_conf/hyperdrop.sc"},"data-share":{"shares":[{"name":"{{wizard_shared_folder}}","permission":{"rw":["hyperdrop"]}}]}}
