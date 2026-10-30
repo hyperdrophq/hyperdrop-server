@@ -1,0 +1,6 @@
+repository: https://github.com/danielmiessler/SecLists
+path: Passwords/Common-Credentials/10-million-password-list-top-100000.txt
+commit: 2d5dc7504a40962c53f932a6d9d5ece4b213dfc6
+sha256: e30e15faecc8db2d3181c3126e3b2c0cd5c187af10a5e4e83babfa157edab188
+filter: Each line is ASCII-lowercased, kept when it is 8 to 72 printable ASCII bytes and matches nothing in platforms/opensource/private-patterns.txt, deduplicated on first occurrence, cut to the first 10000 and sorted in byte order (gen.sh).
+note: SecLists removed this file from master as a duplicate of Passwords/Common-Credentials/xato-net-10-million-passwords-100000.txt (a different ordering); the commit above is the last one that held it.

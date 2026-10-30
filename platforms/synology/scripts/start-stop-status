@@ -1,0 +1,231 @@
+#!/bin/sh
+# HyperDrop service control. DSM calls this with start|stop|status.
+# The package user runs it (conf/privilege run-as package) on both DSM
+# generations; the server binds only the high ports from the wizard, so it
+# needs no CAP_NET_BIND_SERVICE.
+# shellcheck source-path=SCRIPTDIR source=common
+. "$(dirname "$0")/common"
+CONF="$VAR/hyperdrop.conf"
+LOG="$VAR/hyperdrop.log"
+PID="$VAR/hyperdrop.pid"
+SEED="$VAR/admin-password.seed"
+USER_SEED="$VAR/admin-user.seed"
+BIN="$TARGET/bin/hyperdrop-server"
+
+# Every live process running this package's binary, by resolved executable
+# rather than by the pid file: a start that cannot bind still records its own
+# pid, so the file can name a dead process while the real server keeps running
+# and holding the port. An upgrade replaces the binary under a running
+# process, and /proc then reports its path with a " (deleted)" suffix.
+# The server is started with no argument, and the same binary also runs the
+# DSM page (`dsmpage`), its Save worker (`dsmpage-apply`, which runs this
+# script) and the operator subcommands (`admins`, `resetadmin`, ...): a
+# process with any argument is not the server. Nor is one whose command line
+# is empty or unreadable: it has exited since its exe was read, as a live
+# server's command line always holds its program name.
+server_pids() {
+    target=$(readlink -f "$BIN" 2>/dev/null || echo "$BIN")
+    for entry in /proc/[0-9]*; do
+        exe=$(readlink "$entry/exe" 2>/dev/null) || continue
+        case "${exe% (deleted)}" in
+            "$target")
+                args=$(tr '\000' '\n' < "$entry/cmdline" 2>/dev/null)
+                [ -n "$args" ] || continue
+                [ -z "$(printf '%s\n' "$args" | sed -n 2p)" ] && echo "${entry#/proc/}"
+                ;;
+        esac
+    done
+}
+
+# alive PID answers 0 while PID runs. kill -0 also reaches a child that has
+# exited and not been reaped; its command line on Linux is empty.
+alive() {
+    kill -0 "$1" 2>/dev/null || return 1
+    [ ! -d /proc/self ] || [ -n "$(tr -d '\000' < "/proc/$1/cmdline" 2>/dev/null)" ]
+}
+
+# start_failed SINCE ends a start whose server exited at once. The reason is
+# the lastError the server left in the status file at or after SINCE (a
+# failed bind), else a pointer to its log. It goes to SYNOPKG_TEMP_LOGFILE,
+# which Package Center shows, only when that is a plain file or absent: a
+# link there is never followed.
+start_failed() {
+    reason=""
+    if [ -f "$VAR/status.json" ]; then
+        st=$(cat "$VAR/status.json" 2>/dev/null)
+        at=$(printf '%s\n' "$st" | sed -n 's/.*"at":\([0-9][0-9]*\).*/\1/p')
+        if [ -n "$at" ] && [ "$at" -ge "$1" ]; then
+            reason=$(printf '%s\n' "$st" | sed -n 's/.*"lastError":"\([^"]*\)".*/\1/p')
+        fi
+    fi
+    [ -n "$reason" ] || reason="HyperDrop stopped as soon as it started. Its log is $DATA/logs/server.log."
+    printf '%s\n' "$reason" >&2
+    if [ -n "$SYNOPKG_TEMP_LOGFILE" ]; then
+        if plain_file "$SYNOPKG_TEMP_LOGFILE"; then
+            printf '%s\n' "$reason" > "$SYNOPKG_TEMP_LOGFILE"
+        elif [ ! -e "$SYNOPKG_TEMP_LOGFILE" ] && [ ! -L "$SYNOPKG_TEMP_LOGFILE" ]; then
+            (set -C && printf '%s\n' "$reason" > "$SYNOPKG_TEMP_LOGFILE") 2>/dev/null
+        fi
+    fi
+    exit 1
+}
+
+# refuse_start records why the server was not started where the app reads it
+# and ends the script with a failure.
+refuse_start() {
+    printf '{"lastError":"%s","at":%s}\n' "$1" "$(date +%s)" | write_var status.json 600
+    exit 1
+}
+
+locked_text="The HyperDrop folder is locked or missing. Unlock it in Control Panel, Shared Folder."
+replaced_text="The HyperDrop folder is empty or was replaced. Restore it from a backup, or reinstall HyperDrop to start over."
+
+# check_data_id holds the data folder to the id this install recorded. The
+# first start of an empty folder records a new id in the folder's marker file
+# and in the conf; a folder that already holds a marker while the conf has no
+# id (a reinstall) is adopted; any other folder must hold the recorded id.
+# Only DSM's own entries (@eaDir, #recycle, #snapshot) leave a folder empty.
+check_data_id() {
+    marker="$DATA/.hyperdrop"
+    held=""
+    wrote_marker=""
+    [ -f "$marker" ] && held=$(head -n 1 "$marker")
+    if [ -n "$HYPERDROP_DATA_ID" ]; then
+        [ "$held" = "$HYPERDROP_DATA_ID" ] || refuse_start "$replaced_text"
+        return 0
+    fi
+    if [ -n "$held" ]; then
+        HYPERDROP_DATA_ID="$held"
+    else
+        for entry in "$DATA"/* "$DATA"/.[!.]* "$DATA"/..?*; do
+            [ -e "$entry" ] || [ -L "$entry" ] || continue
+            case "${entry##*/}" in
+            @eaDir | '#recycle' | '#snapshot') ;;
+            *) refuse_start "$replaced_text" ;;
+            esac
+        done
+        HYPERDROP_DATA_ID=$(od -An -N16 -tx1 < /dev/urandom | tr -d ' \n')
+        printf '%s\n' "$HYPERDROP_DATA_ID" > "$marker" || refuse_start "$locked_text"
+        wrote_marker=1
+    fi
+    if ! conf_set HYPERDROP_DATA_ID "$HYPERDROP_DATA_ID"; then
+        [ -z "$wrote_marker" ] || rm -f "$marker"
+        refuse_start "HyperDrop could not record its data folder. Check free space on the volume, then start it again."
+    fi
+}
+
+case "$1" in
+start)
+    # One server at a time: a second would fail to bind and then overwrite the
+    # pid of the one that is actually serving.
+    running=$(server_pids)
+    if [ -n "$running" ]; then
+        echo "$running" | head -n 1 > "$PID"
+        exit 0
+    fi
+    # -r, not -f: a conf this user cannot READ would abort the whole script
+    # (`.` is a special builtin; its failure exits a POSIX shell), and the
+    # server's own "domain is required" refusal in the log beats silence.
+    # shellcheck source=/dev/null # the conf postinst wrote
+    [ -r "$CONF" ] && . "$CONF"
+    DATA=$(data_path)
+    if [ "$DSM_MAJOR" = "6" ]; then
+        mkdir -p "$DATA"
+    else
+        # The data is a DSM shared folder, and DSM recreates a deleted one
+        # empty at every start, so it must also hold this install's marker.
+        if [ -z "$DATA" ] || [ ! -d "$DATA" ] || [ ! -w "$DATA" ]; then
+            refuse_start "$locked_text"
+        fi
+        check_data_id
+    fi
+    write_port_conf
+    # The server's stderr, rotated here, at start. With
+    # HYPERDROP_CHANNEL=synology the server logs to data/logs/server.log
+    # alone, which it rotates itself, so this file holds only what the Go
+    # runtime writes to stderr (a panic's trace) and a refusal before the
+    # log opens.
+    if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 10485760 ]; then
+        mv "$LOG" "$LOG.old"
+    fi
+    HYPERDROP_DATA="$DATA"
+    HYPERDROP_STATUS_FILE="$VAR/status.json"
+    HYPERDROP_ADDRESS_REQUEST="$VAR/address-request"
+    HYPERDROP_CONF="$CONF"
+    HYPERDROP_BEHIND_NAT=1
+    HYPERDROP_CHANNEL=synology
+    # The app needs both this value and /api/health's CPU architecture to
+    # link straight to the one SPK this NAS accepts.
+    HYPERDROP_PLATFORM="dsm$DSM_MAJOR"
+    # Every mounted volume is scanned for shared folders the package user can
+    # read; those become the roots a linked share may point at. The admin
+    # grants one under Control Panel, Shared Folder, Permissions, System
+    # internal user, on DSM 6.2 as on DSM 7.
+    # shellcheck disable=SC2012 # DSM volume names are /volume<N>, nothing to escape
+    HYPERDROP_LINKED_SCAN=$(ls -d /volume[0-9]* 2>/dev/null | tr '\n' ':' | sed 's/:$//')
+    export HYPERDROP_LINKED_SCAN
+    export HYPERDROP_DATA HYPERDROP_STATUS_FILE HYPERDROP_ADDRESS_REQUEST HYPERDROP_CONF HYPERDROP_BEHIND_NAT HYPERDROP_CHANNEL HYPERDROP_PLATFORM
+    export HYPERDROP_DOMAIN HYPERDROP_DDNS_NAME HYPERDROP_HTTP_ADDR HYPERDROP_HTTPS_ADDR
+    # The wizard's optional proxy address: empty, or absent from the conf,
+    # leaves the PROXY protocol off.
+    export HYPERDROP_TRUSTED_PROXIES
+    # One-shot seeds: the server reads the password seed itself, so the
+    # password never enters its environment, and removes it once the volume
+    # has an administrator. The username seed is passed while the password
+    # seed is there and removed once it is gone.
+    if [ -f "$SEED" ]; then
+        HYPERDROP_ADMIN_PASSWORD_FILE="$SEED"
+        export HYPERDROP_ADMIN_PASSWORD_FILE
+        if [ -f "$USER_SEED" ]; then
+            HYPERDROP_ADMIN_USER=$(cat "$USER_SEED")
+            export HYPERDROP_ADMIN_USER
+        fi
+    else
+        rm -f "$USER_SEED"
+    fi
+    # A server that cannot start (a port in use, a bad conf) exits within
+    # its first seconds, so the start is judged after watching it for up to
+    # HYPERDROP_TEST_START_WAIT seconds (5; the test seam). One still running
+    # then is a start that succeeded.
+    since=$(date +%s)
+    "$BIN" >> "$LOG" 2>&1 &
+    pid=$!
+    echo "$pid" > "$PID"
+    n=0
+    while [ "$n" -lt "${HYPERDROP_TEST_START_WAIT:-5}" ]; do
+        sleep 1
+        n=$((n+1))
+        alive "$pid" || start_failed "$since"
+    done
+    exit 0
+    ;;
+stop)
+    # Stops every server process running this binary (server_pids), which
+    # includes the one the pid file names when it is still alive (start
+    # records the pid of "$BIN" itself). The pid file alone is not trusted:
+    # it can be stale, and a recycled pid may belong to an unrelated process.
+    # No server may survive a stop, or the next start cannot bind the port.
+    # The DSM page's CGI, its Save worker and the operator subcommands run
+    # this binary too and are not servers: they keep running.
+    for pid in $(server_pids); do
+        kill "$pid" 2>/dev/null
+    done
+    n=0
+    while [ -n "$(server_pids)" ] && [ "$n" -lt 30 ]; do
+        sleep 1
+        n=$((n+1))
+    done
+    for pid in $(server_pids); do
+        kill -9 "$pid" 2>/dev/null
+    done
+    rm -f "$PID"
+    exit 0
+    ;;
+status)
+    [ -n "$(server_pids)" ] && exit 0
+    exit 3
+    ;;
+*)
+    exit 0
+    ;;
+esac

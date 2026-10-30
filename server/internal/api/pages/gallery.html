@@ -1,0 +1,1524 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+{{template "favicon"}}
+<title>{{.Title}}</title>
+{{.OG}}
+<style>
+:root{
+  {{template "brandTokens"}}
+  --tile:#EFEFF4; --chip:#F2F2F7; --chipOn:#1D1D1F; --chipOnInk:#FFFFFF;
+  --rh:130px; --gap:5px;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --ink:#F5F5F7; --paper:#131315; --muted:#9A9AA0; --hairline:#2E2E33;
+         --tile:#1E1E22; --chip:#232329; --chipOn:#F5F5F7; --chipOnInk:#131315; }
+}
+*{box-sizing:border-box}
+/* On the root only: an overflow clip on body would make body the bar's
+   sticky container, and body never scrolls here, so the bar would scroll
+   away with the grid. */
+html{overflow-x:hidden}
+body{margin:0;background:var(--paper);color:var(--ink);
+     font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+     -webkit-text-size-adjust:100%}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1600px;margin:0 auto;padding:0 14px 60px}
+/* ONE bar: the share's name, the kind chips and the sort menu share a row
+   with Download all, and the row stays at the top as the grid scrolls. A
+   second row for the controls cost the height of a tile row on every
+   screen for two controls that fit beside the title. */
+.bar{display:flex;align-items:center;gap:12px;padding:12px 0 10px;
+     position:sticky;top:0;z-index:5;background:var(--paper);
+     border-bottom:1px solid var(--hairline);margin-bottom:14px}
+.bar .mark{flex:none;border-radius:9px}
+h1{font-size:19px;margin:0;letter-spacing:-.01em;overflow-wrap:anywhere}
+.sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+.grow{flex:1 1 auto;min-width:0}
+.btn{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 13px;
+     border:1px solid var(--hairline);border-radius:9px;background:transparent;
+     color:inherit;font:inherit;font-size:13.5px;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{border:0;color:#fff;font-weight:600;
+             background:linear-gradient(135deg,var(--indigo),var(--sky))}
+.btn.primary:hover{filter:brightness(1.07)}
+.chips{flex:0 1 auto;min-width:0;display:flex;gap:6px;overflow-x:auto;
+       scrollbar-width:none;-ms-overflow-style:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{min-height:32px;padding:0 12px;border-radius:16px;border:0;background:var(--chip);
+      color:inherit;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;
+      display:inline-flex;align-items:center;gap:5px}
+.chip[aria-pressed="true"]{background:var(--chipOn);color:var(--chipOnInk)}
+.chip .n{opacity:.6;font-variant-numeric:tabular-nums}
+select{min-height:34px;padding:0 9px;font:inherit;font-size:13.5px;
+  color:inherit;background:var(--chip);border:1px solid transparent;border-radius:9px}
+select:focus{outline:2px solid var(--sky);outline-offset:1px}
+/* A section title, not a caption: at the muted grey the bar's own subtitle
+   uses it read as a label on the grid rather than a break in it, which a
+   gallery of ninety months is mostly made of. */
+.ghead{font-size:17px;font-weight:700;letter-spacing:-.01em;
+       margin:28px 0 10px;color:var(--ink)}
+.ghead:first-child{margin-top:0}
+.grid{display:flex;flex-wrap:wrap;gap:var(--gap)}
+.grid::after{content:"";flex-grow:999999}
+.tile{position:relative;height:var(--rh);flex:1 1 auto;min-width:80px;
+      border-radius:8px;overflow:hidden;background:var(--tile);display:block;cursor:pointer}
+.tile img{width:100%;height:100%;object-fit:cover;display:block;
+          transition:transform .18s ease}
+.tile:hover img{transform:scale(1.035)}
+.tile:focus{outline:3px solid var(--sky);outline-offset:2px}
+/* Scrolled into view, a tile clears the sticky bar above and the edge below,
+   ring included. */
+.tile{scroll-margin:78px 0 14px}
+.tile .glyph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+             color:var(--muted)}
+.tile .cap{position:absolute;left:0;right:0;bottom:0;padding:16px 8px 6px;font-size:11.5px;
+           color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.62));
+           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{position:absolute;right:6px;bottom:6px;padding:1px 6px;border-radius:5px;
+       background:rgba(0,0,0,.62);color:#fff;font-size:11px;font-variant-numeric:tabular-nums;
+       display:flex;align-items:center;gap:4px}
+.rows{border-top:1px solid var(--hairline)}
+.row{display:flex;align-items:center;gap:12px;padding:9px 4px;
+     border-bottom:1px solid var(--hairline)}
+.row .nm{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.row .sz{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.row .lk{white-space:nowrap;font-size:13px}
+.row .lk a{color:var(--indigo)}
+@media (prefers-color-scheme: dark){.row .lk a{color:var(--sky)}}
+.row .lk a:hover{text-decoration:underline}
+.empty{color:var(--muted);padding:40px 0;text-align:center}
+.more{margin:24px 0 0;text-align:center}
+footer{margin-top:36px;padding:14px 0;border-top:1px solid var(--hairline);
+       display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+       color:var(--muted);font-size:12.5px}
+footer strong{color:var(--ink)}
+footer strong a{color:inherit;text-decoration:none}
+footer strong a:hover{text-decoration:underline}
+footer .sp{flex:1 1 auto}
+footer a{color:var(--muted);text-decoration:underline}
+.hide{display:none !important}
+/* The lightbox covers the page, so the page must stop scrolling under it.
+   overflow-x:hidden above makes HTML the scroll container, which is why this
+   cannot be set on body. */
+html.lbopen,html.lbopen body{overflow:hidden}
+
+/* The lightbox is always dark: that is what a picture wants behind it. */
+.lb{position:fixed;inset:0;z-index:50;background:#000;color:#fff;
+    display:flex;flex-direction:column;transition:background-color .24s ease}
+/* Veiled is the state at both ends of the flight, when the item is travelling
+   between its tile and the screen: no backdrop and no chrome, so what moves is
+   the picture and the grid stays where the reader left it. */
+.lb.veil{background-color:transparent}
+.lb.veil .top,.lb.veil .hud,.lb.veil .flash{opacity:0}
+.lb:focus{outline:none}
+.lb .top{display:flex;align-items:center;gap:10px;padding:10px 14px;
+         padding-top:calc(10px + env(safe-area-inset-top));
+         background:rgba(0,0,0,.55);flex:none;z-index:2;
+         transition:opacity .2s ease}
+.lb .name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+          font-size:14px}
+.lb .top .name{flex:0 1 auto;max-width:30%}
+/* The filmstrip sits in the middle of the top bar, which is otherwise empty:
+   where you are in the share, in pictures, without a row of its own. The slots
+   are fixed width and the ends of the strip carry BLANK ones, so the current
+   item sits in the centre at every index and the eye does not chase it along
+   the bar. The strip is as wide as its visible slots and the REEL inside it
+   carries one more at each end, hidden past the edge: a step slides the reel
+   by one slot with the stage, and the slot arriving comes in through the
+   fade rather than popping into the last place. Too narrow for the window,
+   the strip is clipped evenly on both sides the same way. */
+.lb .strip{flex:0 1 auto;min-width:0;max-width:774px;margin:0 auto;display:flex;
+           justify-content:center;align-items:center;overflow:hidden;
+           -webkit-mask-image:linear-gradient(90deg,transparent,#000 30px,#000 calc(100% - 30px),transparent);
+           mask-image:linear-gradient(90deg,transparent,#000 30px,#000 calc(100% - 30px),transparent)}
+.lb .reel{flex:none;display:flex;gap:6px}
+/* The ring is drawn INSIDE the slot: an outer one would be clipped by the
+   strip's own overflow, and a box-shadow would sit under the thumbnail. It is
+   a colour on every slot, so a step fades it out of the one leaving the
+   centre and into the one arriving over the length of the slide, and the
+   frame travels with the pictures the way the item on stage does. */
+.lb .th{flex:none;width:46px;height:46px;padding:0;border:0;border-radius:7px;overflow:hidden;
+        background:rgba(255,255,255,.09);cursor:pointer;position:relative;opacity:.5;
+        outline:2px solid transparent;outline-offset:-2px;
+        transition:opacity .15s ease,outline-color var(--step) ease}
+.lb .th:hover{opacity:.85}
+.lb .th.on{opacity:1;outline-color:#fff}
+.lb .th.gap{visibility:hidden}
+.lb .th img{width:100%;height:100%;object-fit:cover;display:block}
+.lb .th .glyph{color:#9a9aa0}
+.lb .stage{flex:1 1 auto;position:relative;display:flex;align-items:center;
+           justify-content:center;overflow:hidden;min-height:0}
+/* An open item is something to look at, not another control: plain arrow over
+   it, and a click on the picture itself does nothing. */
+.lb .stage img{max-width:100%;max-height:100%;object-fit:contain;display:block;cursor:default}
+.lb .stage video{max-width:100%;max-height:100%;background:#000}
+.lb .pane{display:flex;flex-direction:column;align-items:center;gap:18px;padding:20px;
+          width:min(560px,92vw);text-align:center}
+.lb .pane img{width:230px;height:230px;object-fit:cover;border-radius:12px}
+.lb .pane audio{width:100%}
+/* The item's details and its buttons lie OVER the item, in the box the item
+   itself occupies, and only while a clip's own controls would be showing:
+   the stage is the picture's, and nothing sits under it or beside it. The
+   script places the box and fades the overlay in on pointer or key activity,
+   out after a pause, and keeps it while a clip is paused, which is when the
+   browser keeps its controls. Both corners are the top ones, clear of a
+   clip's control bar. */
+/* Out over the second Chrome's panel takes, in at once as the panel comes. */
+.lb .hud{position:absolute;pointer-events:none;opacity:0;z-index:3;
+         transition:opacity 1s ease}
+.lb .hud.on{opacity:1;transition-duration:.15s}
+.lb .hud.on .acts{pointer-events:auto}
+.lb .hud .meta{position:absolute;left:10px;top:10px;max-width:calc(100% - 114px);
+               padding:6px 10px;border-radius:8px;background:rgba(0,0,0,.5);
+               color:#e4e4e8;font-size:12.5px;white-space:nowrap;overflow:hidden;
+               text-overflow:ellipsis}
+.lb .hud .acts{position:absolute;right:10px;top:10px;display:flex;gap:8px}
+.lb .hud .ico{background:rgba(0,0,0,.5)}
+.lb .hud .ico:hover{background:rgba(0,0,0,.8)}
+.lb .ico{width:38px;height:38px;min-height:38px;padding:0;border:0;border-radius:9px;
+         background:rgba(255,255,255,.10);color:#fff;cursor:pointer;
+         display:inline-flex;align-items:center;justify-content:center}
+.lb .ico:hover{background:rgba(255,255,255,.2)}
+.lb .ico[aria-pressed="true"]{background:#fff;color:#000}
+#lbplay .halt{display:none}
+#lbplay[aria-pressed="true"] .go{display:none}
+#lbplay[aria-pressed="true"] .halt{display:inline}
+.lb .count{font-variant-numeric:tabular-nums;color:#c9c9cf;font-size:12.5px}
+.lb .flash{position:absolute;left:50%;bottom:28px;transform:translateX(-50%);
+           padding:7px 14px;border-radius:999px;background:rgba(255,255,255,.16);
+           font-size:12.5px;opacity:0;transition:opacity .18s ease;pointer-events:none;z-index:4}
+.lb .flash.on{opacity:1}
+@media (max-width:700px){
+  :root{--gap:3px}
+  .wrap{padding:0 8px 40px}
+  /* The kind chips and the sort menu get their own line on a phone. Sharing
+     one with the title squeezed the chips to "Vi..." and hid the rest, which
+     is worse than a second row. */
+  .bar{flex-wrap:wrap;row-gap:8px}
+  .chips{order:5;flex:1 1 auto}
+  #sort{order:6}
+  .lb .strip{display:none}
+}
+@media (prefers-reduced-motion: reduce){
+  .tile img,.lb .flash,.lb .th,.lb .reel,.lb,.lb .top,.lb .hud{transition:none}
+  .tile:hover img{transform:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="bar">
+{{template "mark" 34}}
+<div class="grow">
+  <h1>{{.Title}}</h1>
+  <div class="sub" id="sub">{{.Count}} file{{if ne .Count 1}}s{{end}} &middot; {{.TotalSize}}</div>
+</div>
+<div class="chips" id="chips"></div>
+<select id="sort" aria-label="Sort by">
+  <option value="date-desc">Newest first</option>
+  <option value="date-asc">Oldest first</option>
+  <option value="name-asc">Name A to Z</option>
+  <option value="name-desc">Name Z to A</option>
+  <option value="size-desc">Largest first</option>
+  <option value="size-asc">Smallest first</option>
+</select>
+<a class="btn primary" href="{{.ZipURL}}">Download all</a>
+</header>
+
+<main>
+  <div id="groups"></div>
+  <section id="filesec" class="hide">
+    <h2 class="ghead">Files</h2>
+    <div class="rows" id="filelist"></div>
+  </section>
+  <p id="empty" class="empty hide">Nothing here matches.</p>
+  {{if .More}}<p class="more"><a class="more btn" href="{{.More}}">More</a></p>{{end}}
+</main>
+
+<footer>
+  <span>Shared with <strong><a class="brand-link" href="https://gethyperdrop.com" rel="noopener">HyperDrop</a></strong></span>
+  <span class="sp"></span>
+  <a href="{{.FilesURL}}">View as a file list</a>
+</footer>
+</div>
+
+<div id="lb" class="lb hide" role="dialog" aria-modal="true" aria-label="Media viewer" tabindex="-1">
+  <div class="top">
+    <span class="name" id="lbname"></span>
+    <div class="strip" id="lbstrip"><div class="reel" id="lbreel"></div></div>
+    <span class="count" id="lbcount"></span>
+    <button class="ico" id="lbplay" aria-pressed="false" title="Slideshow" aria-label="Slideshow">
+      <svg class="go" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 L13 8 L4 13.5 Z" fill="currentColor"/></svg>
+      <svg class="halt" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>
+    </button>
+    <button class="ico" id="lbclose" title="Close" aria-label="Close">
+      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3 L13 13 M13 3 L3 13" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="stage" id="lbstage"></div>
+  <div class="hud" id="lbhud">
+    <span class="meta" id="lbmeta"></span>
+    <div class="acts">
+      <button class="ico" id="lbcopy" title="Copy link to this item" aria-label="Copy link to this item">
+        <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 9.5 a3 3 0 0 0 4.2 0 l2-2 a3 3 0 0 0 -4.2 -4.2 l-1 1 M9.5 6.5 a3 3 0 0 0 -4.2 0 l-2 2 a3 3 0 0 0 4.2 4.2 l1 -1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <a class="ico" id="lbdown" title="Download" aria-label="Download" download>
+        <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 V10 M4.5 7 L8 10.5 L11.5 7 M3 13 H13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+    </div>
+  </div>
+  <div class="flash" id="lbflash"></div>
+</div>
+
+<script type="application/json" id="data" data-share="{{.ID}}">{{.Items}}</script>
+<script>
+(function(){
+"use strict";
+var dataEl = document.getElementById("data");
+var ITEMS = [];
+try { ITEMS = JSON.parse(dataEl.textContent) || []; } catch (e) { ITEMS = []; }
+
+var groupsEl = document.getElementById("groups");
+var fileSec = document.getElementById("filesec");
+var fileList = document.getElementById("filelist");
+var emptyEl = document.getElementById("empty");
+var chipsEl = document.getElementById("chips");
+var sortEl = document.getElementById("sort");
+var subEl = document.getElementById("sub");
+
+var KINDS = ["photo", "video", "audio", "file"];
+var LABELS = {photo: "Photos", video: "Videos", audio: "Audio", file: "Files"};
+var ONE = {photo: "photo", video: "video", audio: "audio file", file: "file"};
+// The tile height, one number per viewport width. Two, because a 180 px row
+// that fits eight photos on a laptop fits ONE on a phone: the tile width is
+// this times the aspect ratio, so the number has to know how wide the viewport
+// is. The script sets --rh from it as an inline style, which is why there is
+// no media query for the height.
+var WIDE_RH = 130, NARROW_RH = 90;
+var NARROW_AT = 700;
+var SLIDE_MS = 4000;
+
+function rowHeightPx(){
+  return window.innerWidth < NARROW_AT ? NARROW_RH : WIDE_RH;
+}
+
+var state = {kind: "all", sort: "", shown: []};
+
+/* ---------- formatting ---------- */
+
+function esc(s){
+  return String(s).split("&").join("&amp;").split("<").join("&lt;")
+                  .split(">").join("&gt;").split('"').join("&quot;");
+}
+
+function fmtSize(n){
+  if (n < 1024) return n + " B";
+  var u = ["KB", "MB", "GB", "TB"], i = -1, v = n;
+  do { v = v / 1024; i++; } while (v >= 1024 && i < u.length - 1);
+  return (v < 10 ? v.toFixed(1) : Math.round(v)) + " " + u[i];
+}
+
+function fmtDur(ms){
+  if (!ms || ms < 0) return "";
+  var s = Math.round(ms / 1000);
+  var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  var two = function(x){ return x < 10 ? "0" + x : "" + x; };
+  return h > 0 ? h + ":" + two(m) + ":" + two(r) : m + ":" + two(r);
+}
+
+function dateOf(it){
+  var raw = it.ta || it.ca;
+  if (!raw) return null;
+  var d = new Date(raw);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function fmtDate(d){
+  if (!d) return "";
+  try {
+    return d.toLocaleDateString(undefined, {year: "numeric", month: "long", day: "numeric"});
+  } catch (e) { return d.toDateString(); }
+}
+
+function sameDay(a, b){
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() &&
+         a.getDate() === b.getDate();
+}
+
+function groupLabel(d){
+  if (!d) return "No date";
+  var now = new Date();
+  if (sameDay(d, now)) return "Today";
+  if (sameDay(d, new Date(now.getTime() - 86400000))) return "Yesterday";
+  try {
+    if (d.getFullYear() === now.getFullYear()) {
+      return d.toLocaleDateString(undefined, {month: "long"});
+    }
+    return d.toLocaleDateString(undefined, {year: "numeric", month: "long"});
+  } catch (e) { return "" + d.getFullYear(); }
+}
+
+function aspect(it){
+  if (it.w > 0 && it.h > 0) return Math.min(3.2, Math.max(0.4, it.w / it.h));
+  return 1;
+}
+
+function lower(s){ return String(s).toLowerCase(); }
+
+/* ---------- selection ---------- */
+
+function counts(){
+  var c = {all: 0, photo: 0, video: 0, audio: 0, file: 0};
+  for (var i = 0; i < ITEMS.length; i++) {
+    c.all++;
+    c[ITEMS[i].k] = (c[ITEMS[i].k] || 0) + 1;
+  }
+  return c;
+}
+
+function sortItems(list){
+  var parts = state.sort.split("-");
+  var key = parts[0], dir = parts[1] === "asc" ? 1 : -1;
+  list.sort(function(a, b){
+    var r = 0;
+    if (key === "name") {
+      r = lower(a.n) < lower(b.n) ? -1 : (lower(a.n) > lower(b.n) ? 1 : 0);
+    } else if (key === "size") {
+      r = a.z - b.z;
+    } else {
+      var da = dateOf(a), db = dateOf(b);
+      r = (da ? da.getTime() : 0) - (db ? db.getTime() : 0);
+    }
+    if (r !== 0) return r * dir;
+    // A stable tiebreak, so two photos taken in the same second do not swap
+    // places between renders.
+    return lower(a.n) < lower(b.n) ? -1 : (lower(a.n) > lower(b.n) ? 1 : 0);
+  });
+  return list;
+}
+
+function selected(){
+  var out = [];
+  for (var i = 0; i < ITEMS.length; i++) {
+    var it = ITEMS[i];
+    if (state.kind !== "all" && it.k !== state.kind) continue;
+    out.push(it);
+  }
+  return sortItems(out);
+}
+
+/* ---------- rendering ---------- */
+
+var PLAY_SVG = '<svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5 L13 8 L4 13.5 Z" fill="currentColor"/></svg>';
+var NOTE_SVG = '<svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V6l10-2v12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="7" cy="18" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="17" cy="16" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
+var FILM_SVG = '<svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 5v14M16 5v14M3 12h18" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
+var DOC_SVG = '<svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M14 3v5h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+
+function tileHTML(it, index, rowHeight){
+  var a = aspect(it);
+  var w = Math.round(rowHeight * a);
+  var style = "flex-grow:" + a.toFixed(4) + ";flex-basis:" + w + "px;width:" + w + "px";
+  var inner;
+  if (it.k === "audio") {
+    inner = it.t
+      ? '<img loading="lazy" decoding="async" src="' + esc(it.t) + '" alt="">'
+      : '<div class="glyph">' + NOTE_SVG + '</div>';
+    inner += '<div class="cap">' + esc(it.n) + '</div>';
+  } else {
+    // A clip stands for itself only once it HAS a tile: an MP4 handed to an
+    // <img> is a few MB pulled for nothing and then the error handler's
+    // glyph anyway. A photo is its own fallback, at full size.
+    var src = it.t || (it.k === "photo" ? it.v : "");
+    inner = src
+      ? '<img loading="lazy" decoding="async" src="' + esc(src) +
+        '" alt="' + esc(it.n) + '">'
+      : '<div class="glyph">' + FILM_SVG + '</div>';
+  }
+  if (it.k === "video") {
+    inner += '<span class="badge">' + PLAY_SVG + (fmtDur(it.ms) || "") + '</span>';
+  }
+  return '<a class="tile" style="' + style + '" href="' + esc(it.v) + '"' +
+         ' data-i="' + index + '">' + inner + "</a>";
+}
+
+function rowHTML(it){
+  var right = '<span class="sz">' + fmtSize(it.z) + '</span>' +
+      '<span class="lk"><a href="' + esc(it.v) + '">View</a> &middot; ' +
+      '<a href="' + esc(it.d) + '">Download</a></span>';
+  return '<div class="row"><span class="nm">' + esc(it.p || it.n) + '</span>' + right + '</div>';
+}
+
+function render(){
+  var list = selected();
+  state.shown = [];
+  var media = [], files = [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].k === "file") files.push(list[i]); else media.push(list[i]);
+  }
+  var rowHeight = rowHeightPx();
+  document.documentElement.style.setProperty("--rh", rowHeight + "px");
+
+  var byDate = state.sort.indexOf("date") === 0;
+  var html = "", open = false, last = null;
+  for (var j = 0; j < media.length; j++) {
+    var it = media[j];
+    state.shown.push(it);
+    if (byDate) {
+      var label = groupLabel(dateOf(it));
+      if (label !== last) {
+        if (open) html += "</div>";
+        html += '<h2 class="ghead">' + esc(label) + '</h2><div class="grid">';
+        open = true;
+        last = label;
+      }
+    } else if (!open) {
+      html += '<div class="grid">';
+      open = true;
+    }
+    html += tileHTML(it, state.shown.length - 1, rowHeight);
+  }
+  if (open) html += "</div>";
+  groupsEl.innerHTML = html;
+  tileList = Array.prototype.slice.call(groupsEl.querySelectorAll(".tile"));
+
+  if (files.length) {
+    var fh = "";
+    for (var k = 0; k < files.length; k++) fh += rowHTML(files[k]);
+    fileList.innerHTML = fh;
+    fileSec.classList.remove("hide");
+  } else {
+    fileList.innerHTML = "";
+    fileSec.classList.add("hide");
+  }
+  emptyEl.classList.toggle("hide", media.length + files.length > 0);
+  resetStrip();
+  renderChips();
+}
+
+// Which chips EXIST is a property of the whole gallery, computed once. Only
+// the counts follow the search: recomputing the set as well made the row
+// vanish the moment a search narrowed to one kind, taking the way back to
+// All with it.
+var presentKinds = (function(){
+  var seen = {}, out = [];
+  for (var i = 0; i < ITEMS.length; i++) seen[ITEMS[i].k] = true;
+  for (var j = 0; j < KINDS.length; j++) if (seen[KINDS[j]]) out.push(KINDS[j]);
+  return out;
+})();
+
+function renderChips(){
+  // With one kind the chips would say nothing the header does not.
+  if (presentKinds.length < 2) { chipsEl.innerHTML = ""; return; }
+  var c = counts();
+  var html = '<button class="chip" data-k="all" aria-pressed="' + (state.kind === "all") +
+             '">All <span class="n">' + c.all + '</span></button>';
+  for (var j = 0; j < presentKinds.length; j++) {
+    var k = presentKinds[j];
+    html += '<button class="chip" data-k="' + k + '" aria-pressed="' + (state.kind === k) +
+            '">' + LABELS[k] + ' <span class="n">' + c[k] + '</span></button>';
+  }
+  chipsEl.innerHTML = html;
+}
+
+/* A thumbnail that will not decode is a picture no browser could open (a raw
+   file shared from a terminal, say). The error event does not bubble, so this
+   listens in the capture phase and swaps the tile for a glyph rather than
+   leaving a broken-image icon in the grid. */
+groupsEl.addEventListener("error", function(ev){
+  var t = ev.target;
+  if (!t || t.tagName !== "IMG") return;
+  var tile = t.parentNode;
+  if (!tile || !tile.classList || !tile.classList.contains("tile")) return;
+  t.style.display = "none";
+  if (!tile.querySelector(".glyph")) {
+    var g = document.createElement("div");
+    g.className = "glyph";
+    g.innerHTML = DOC_SVG;
+    tile.appendChild(g);
+  }
+}, true);
+
+/* ---------- lightbox ---------- */
+
+var lb = document.getElementById("lb");
+var stage = document.getElementById("lbstage");
+var lbName = document.getElementById("lbname");
+var lbMeta = document.getElementById("lbmeta");
+var lbCount = document.getElementById("lbcount");
+var lbDown = document.getElementById("lbdown");
+var lbCopy = document.getElementById("lbcopy");
+var lbPlay = document.getElementById("lbplay");
+var lbFlash = document.getElementById("lbflash");
+var lbReel = document.getElementById("lbreel");
+var lbHud = document.getElementById("lbhud");
+var current = -1;
+var slideOn = false;
+var slideTimer = null;
+var lastFocus = null;
+
+// A clip advances the slideshow when it ENDS. Browsers refuse to autoplay
+// audible media until the viewer has interacted with the page, so a refused
+// play would leave the slideshow parked on a clip that will never end: fall
+// back to the ordinary timer when that happens.
+function playOrFallBack(el){
+  var p = el.play();
+  if (!p || !p.catch) return;
+  p.catch(function(){
+    if (!slideOn || slideTimer !== null) return;
+    slideTimer = setTimeout(function(){ step(1); }, SLIDE_MS);
+  });
+}
+
+// The stage reserves the item's own box before a byte of it arrives, from the
+// dimensions in the gallery sidecar. Without them a clip is born at the
+// 300x150 every video element starts at, and a POSTER is no answer: while one
+// is on screen the element takes the THUMBNAIL's size, so the picture lands
+// small and grows the moment the first frame decodes.
+//
+// The box is the FITTED one rather than the item's own size under
+// max-width/max-height: a replaced element given both a width and a height
+// clamps each against its maximum on its own, which fills the stage and
+// letterboxes the picture inside it. Fitting here is what keeps that pair in
+// proportion, and it is the same box the stylesheet would have arrived at.
+function fitInStage(w, h){
+  var sw = stage.clientWidth, sh = stage.clientHeight;
+  if (!(w > 0) || !(h > 0) || sw <= 0 || sh <= 0) return null;
+  // Never past its own size: a lightbox is not a magnifier, and a small clip
+  // blown up to a 4K screen is a worse answer than a small clip.
+  var k = Math.min(sw / w, sh / h, 1);
+  return [Math.round(w * k), Math.round(h * k)];
+}
+
+function sizeTo(el, w, h){
+  var box = fitInStage(w, h);
+  if (!box) {
+    el.removeAttribute("width");
+    el.removeAttribute("height");
+    return;
+  }
+  el.width = box[0];
+  el.height = box[1];
+}
+
+// The clip's own numbers replace the sidecar's as soon as it knows them, which
+// is also what sizes a clip the sidecar says nothing about: a REPLACED file
+// keeps its slug and inherits the old pair, so a stale one costs a moment of
+// the wrong box and never a picture in the wrong proportions.
+function sizeVideo(el, it){
+  sizeTo(el, it.w, it.h);
+  el.addEventListener("loadedmetadata", function(){
+    sizeTo(el, el.videoWidth, el.videoHeight);
+  });
+}
+
+// A clip holds its box as an attribute, so a window that changes size is the
+// one thing that can leave it stale. A picture has handed its own back by
+// then and follows the stylesheet.
+function refitStage(){
+  var v = shownEl;
+  if (!v || v.tagName !== "VIDEO" || current < 0) return;
+  var it = state.shown[current];
+  if (v.videoWidth > 0) sizeTo(v, v.videoWidth, v.videoHeight);
+  else if (it) sizeTo(v, it.w, it.h);
+}
+
+function mediaEl(it, how){
+  var el = document.createElement(it.k === "audio" ? "audio" : "video");
+  el.preload = how;
+  el.setAttribute("playsinline", "");
+  if (it.k !== "audio") {
+    if (it.t) el.poster = it.t;
+    sizeVideo(el, it);
+  }
+  el.src = it.v;
+  return el;
+}
+
+function audioPane(it, au){
+  var el = document.createElement("div");
+  el.className = "pane";
+  el.innerHTML = (it.t ? '<img src="' + esc(it.t) + '" alt="">' : '<div>' + NOTE_SVG + '</div>') +
+                 '<div>' + esc(it.n) + '</div>';
+  el.appendChild(au);
+  return el;
+}
+
+function stageMedia(it){
+  if (it.k === "video" || it.k === "audio") {
+    // The neighbour's element is handed over as it stands: it has already
+    // buffered its opening, so play() starts on the frame the reader asked
+    // for instead of after a round trip.
+    var m = ahead[it.s];
+    if (m) delete ahead[it.s]; else m = mediaEl(it, "auto");
+    m.preload = "auto";
+    m.controls = true;
+    m.addEventListener("ended", function(){ if (slideOn) step(1); });
+    // A pause keeps the controls on screen and the overlay with them; play
+    // starts the clock that puts both away.
+    m.addEventListener("play", hudPoke);
+    m.addEventListener("pause", hudPoke);
+    playOrFallBack(m);
+    return it.k === "audio" ? audioPane(it, m) : m;
+  }
+  var el = document.createElement("img");
+  el.alt = it.n;
+  // The picture's own box up front, handed back to the stylesheet once the
+  // file itself supplies the size. The two agree, so nothing moves; what the
+  // handover buys is a resize, which the stylesheet then refits for free.
+  sizeTo(el, it.w, it.h);
+  el.addEventListener("load", function(){
+    el.removeAttribute("width");
+    el.removeAttribute("height");
+  });
+  el.src = it.v;
+  return el;
+}
+
+// Detaching a media element pauses it but does not end its fetch, so a clip
+// the reader has moved past would keep downloading behind the one on screen.
+// Dropping the source is what stops it.
+function release(el){
+  if (!el) return;
+  el.pause();
+  el.removeAttribute("src");
+  el.load();
+}
+
+function clearStage(){
+  var m = stage.querySelectorAll("video, audio");
+  for (var i = 0; i < m.length; i++) release(m[i]);
+  stage.innerHTML = "";
+  leaving = [];
+  shownEl = null;
+}
+
+/* ---------- the overlay ---------- */
+
+/* The item's details and its buttons, laid over the box the item occupies and
+   shown while a clip's own controls would be. The browser's controls live in
+   a shadow tree this page cannot read, so the overlay keeps its own clock on
+   Chrome's rule: the controls go 2.5 s after play begins or after the last
+   mouse movement OVER THE CLIP (measured against the panel in Chrome's
+   shadow tree, not read from its source), fade out over a second and stay
+   while it is paused. The clock here counts the same events (play, the mouse over
+   the item, a touch, a key), and a step arms only what is left of the window
+   once the slide has settled, so the two fade together. A photo has no
+   controls, and there the overlay simply rests once the reader has stopped
+   moving. */
+var HUD_IDLE_MS = 2500;
+var hudTimer = null;
+var settleTimer = null;
+var hudWatch = null;
+// When the last activity happened, on the same clock the timers use.
+var hudLast = 0;
+
+function shownMedia(){
+  if (!shownEl) return null;
+  var tag = shownEl.tagName;
+  if (tag === "VIDEO" || tag === "AUDIO") return shownEl;
+  return shownEl.querySelector("video, audio");
+}
+
+function placeHud(){
+  if (!shownEl || current < 0) return;
+  var r = shownEl.getBoundingClientRect(), b = lb.getBoundingClientRect();
+  lbHud.style.left = Math.round(r.left - b.left) + "px";
+  lbHud.style.top = Math.round(r.top - b.top) + "px";
+  lbHud.style.width = Math.round(r.width) + "px";
+  lbHud.style.height = Math.round(r.height) + "px";
+}
+
+function hudRest(){
+  hudTimer = null;
+  var m = shownMedia();
+  if (m && m.paused) return;
+  lbHud.classList.remove("on");
+}
+
+function hudArm(ms){
+  if (hudTimer !== null) clearTimeout(hudTimer);
+  hudTimer = setTimeout(hudRest, ms);
+}
+
+// Something moved: show the overlay, and let it rest again after a pause.
+// Measured again on the way in, so whatever moved the item while the overlay
+// was resting cannot show it in the wrong place. During a flight the moment
+// is only noted: the settle shows the overlay for what is left of the window.
+function hudPoke(){
+  if (lb.classList.contains("hide")) return;
+  hudLast = performance.now();
+  if (settleTimer !== null) return;
+  if (!lbHud.classList.contains("on")) placeHud();
+  lbHud.classList.add("on");
+  hudArm(HUD_IDLE_MS);
+}
+
+// Chrome's controls answer the mouse over the clip, not over the page.
+function overItem(t){
+  return !!(t && ((shownEl && shownEl.contains(t)) || lbHud.contains(t)));
+}
+
+function hudHide(){
+  if (hudTimer !== null) { clearTimeout(hudTimer); hudTimer = null; }
+  if (settleTimer !== null) { clearTimeout(settleTimer); settleTimer = null; }
+  if (hudWatch) { hudWatch.disconnect(); hudWatch = null; }
+  lbHud.classList.remove("on");
+}
+
+// The box is measured when the item has come to rest, and again whenever its
+// box changes under it: a clip takes its own size at loadedmetadata, a
+// picture hands its box back to the stylesheet at load, and a resize refits
+// both.
+function settleHud(after){
+  settleTimer = setTimeout(function(){
+    settleTimer = null;
+    placeHud();
+    watchHud();
+    var left = HUD_IDLE_MS - (performance.now() - hudLast);
+    if (left <= 0) { hudRest(); return; }
+    lbHud.classList.add("on");
+    hudArm(left);
+  }, after);
+}
+
+function watchHud(){
+  if (hudWatch) hudWatch.disconnect();
+  if (!shownEl || typeof ResizeObserver !== "function") return;
+  hudWatch = new ResizeObserver(function(){ if (settleTimer === null) placeHud(); });
+  hudWatch.observe(shownEl);
+}
+
+/* ---------- moving between items ---------- */
+
+/* A carousel, as a phone's own photo viewer does it: the two items travel
+   together by the width of the stage, one leaving as the next arrives, and
+   NEITHER fades. A crossfade says "this picture became that one"; a strip
+   moving along says where the next one came from, which is what the arrows
+   mean. The gap is the black the eye reads the two as separate pages by.
+   The leaver is taken OUT OF FLOW first, pinned to the box it already
+   occupies, or the stage's centring would lay the two items side by side and
+   shove the incoming one off centre for the length of the animation. */
+var STEP_MS = 450;
+var STEP_EASE = "cubic-bezier(.32,.72,0,1)";
+var SLIDE_GAP = 24;
+// The strip's ring and dimming follow the same clock, from the stylesheet.
+lb.style.setProperty("--step", STEP_MS + "ms");
+
+// The element on stage, which is not simply its first child while one is on
+// its way out.
+var shownEl = null;
+var leaving = [];
+
+function slideBy(){
+  return stage.clientWidth + SLIDE_GAP;
+}
+
+// Their media was let go as they left; this is only the node.
+function dropLeavers(){
+  for (var i = 0; i < leaving.length; i++) {
+    if (leaving[i].parentNode === stage) stage.removeChild(leaving[i]);
+  }
+  leaving = [];
+}
+
+function leaveStage(el, dir){
+  if (!el) return;
+  // A leaver that has not finished is dropped where it stands: holding the
+  // arrow key must not pile a gallery's worth of them onto the stage.
+  dropLeavers();
+  var s = stage.getBoundingClientRect(), r = el.getBoundingClientRect();
+  release(el.tagName === "VIDEO" || el.tagName === "AUDIO" ? el : el.querySelector("video, audio"));
+  el.style.position = "absolute";
+  el.style.margin = "0";
+  el.style.left = Math.round(r.left - s.left + stage.scrollLeft) + "px";
+  el.style.top = Math.round(r.top - s.top + stage.scrollTop) + "px";
+  el.style.width = Math.round(r.width) + "px";
+  el.style.height = Math.round(r.height) + "px";
+  el.style.pointerEvents = "none";
+  el.style.transition = "transform " + STEP_MS + "ms " + STEP_EASE;
+  el.style.transform = "translateX(" + (-dir * slideBy()) + "px)";
+  leaving.push(el);
+  setTimeout(dropLeavers, STEP_MS);
+}
+
+function enterStage(el, dir){
+  el.style.transition = "none";
+  el.style.transform = "translateX(" + (dir * slideBy()) + "px)";
+  requestAnimationFrame(function(){
+    requestAnimationFrame(function(){
+      el.style.transition = "transform " + STEP_MS + "ms " + STEP_EASE;
+      el.style.transform = "none";
+    });
+  });
+}
+
+/* ---------- the filmstrip ---------- */
+
+/* The window of items either side of the one on screen. The strip shows 2R+1
+   slots and pads past the ends with blank ones, so the current item is
+   centred at index 0 exactly as it is in the middle of the share. The reel
+   holds one more slot at each end, hidden past the strip's edge, which is
+   where the slot a step brings in starts from. */
+var STRIP_R = 7;
+var STRIP_SLOT = 46 + 6;
+// The index the reel is built around, or -1 while it holds nothing, and the
+// slot wearing the ring. Held as an element rather than looked up: a cached
+// slot carries its classes with it, and one that left the reel ringed would
+// come back ringed.
+var stripAt = -1;
+var ringed = null;
+
+// The thumbnails are CACHED and moved rather than rewritten. A fresh <img>
+// for a picture already on screen repaints, and the whole strip blinks on
+// every step.
+var stripCache = {};
+
+function resetStrip(){ stripCache = {}; stripAt = -1; ringed = null; }
+
+function stripThumb(i){
+  var it = state.shown[i];
+  var el = stripCache[it.s];
+  if (el) return el;
+  el = document.createElement("button");
+  el.type = "button";
+  el.className = "th";
+  // Out of the tab order on purpose: fifteen stops between the name and the
+  // close button is not a way through a dialog.
+  el.tabIndex = -1;
+  el.title = it.n;
+  el.setAttribute("aria-label", it.n);
+  var src = it.t || (it.k === "photo" ? it.v : "");
+  if (src) {
+    var img = document.createElement("img");
+    img.decoding = "async";
+    img.alt = "";
+    img.src = src;
+    el.appendChild(img);
+  } else {
+    var g = document.createElement("div");
+    g.className = "glyph";
+    g.innerHTML = it.k === "video" ? PLAY_SVG : (it.k === "audio" ? NOTE_SVG : DOC_SVG);
+    el.appendChild(g);
+  }
+  // The slug rather than the index: a filter or a sort rebuilds the list
+  // under a button this cache is still holding.
+  el.addEventListener("click", function(){
+    var at = indexOfSlug(it.s);
+    if (at < 0) return;
+    stopSlide();
+    show(at, "replace");
+  });
+  stripCache[it.s] = el;
+  return el;
+}
+
+function stripSlot(j){
+  if (j >= 0 && j < state.shown.length) return stripThumb(j);
+  var gap = document.createElement("span");
+  gap.className = "th gap";
+  return gap;
+}
+
+function ringStrip(i){
+  if (ringed) ringed.classList.remove("on");
+  var it = state.shown[i];
+  ringed = it ? stripCache[it.s] || null : null;
+  if (ringed) ringed.classList.add("on");
+}
+
+// A step moves the reel by one slot with the stage: the slots stay where
+// they are for the first frame, then travel to their new places at the
+// stage's pace, so the frame on the current item goes with the pictures.
+function glideStrip(dir){
+  lbReel.style.transition = "none";
+  lbReel.style.transform = "translateX(" + (dir * STRIP_SLOT) + "px)";
+  requestAnimationFrame(function(){
+    requestAnimationFrame(function(){
+      lbReel.style.transition = "transform " + STEP_MS + "ms " + STEP_EASE;
+      lbReel.style.transform = "none";
+    });
+  });
+}
+
+function renderStrip(i, dir){
+  // The stylesheet hides the strip on a phone, where the bar has no room for
+  // it. Building it anyway would fetch thumbnails the grid has not asked for.
+  if (window.innerWidth < NARROW_AT) { lbReel.innerHTML = ""; stripAt = -1; return; }
+  if (!dir || reduceMotion()) dir = 0;
+  if (dir !== 0 && stripAt === i - dir) {
+    // One step from where the reel stands: one slot leaves at the trailing
+    // edge and one arrives at the leading edge, and everything else is the
+    // same element in the same place, which is what lets the ring FADE from
+    // one slot to the next instead of jumping.
+    if (dir > 0) {
+      lbReel.removeChild(lbReel.firstChild);
+      lbReel.appendChild(stripSlot(i + STRIP_R + 1));
+    } else {
+      lbReel.removeChild(lbReel.lastChild);
+      lbReel.insertBefore(stripSlot(i - STRIP_R - 1), lbReel.firstChild);
+    }
+  } else {
+    var frag = document.createDocumentFragment();
+    for (var j = i - STRIP_R - 1; j <= i + STRIP_R + 1; j++) frag.appendChild(stripSlot(j));
+    lbReel.innerHTML = "";
+    lbReel.appendChild(frag);
+  }
+  ringStrip(i);
+  stripAt = i;
+  if (dir !== 0) glideStrip(dir);
+  else { lbReel.style.transition = "none"; lbReel.style.transform = "none"; }
+}
+
+function show(i, hashMode){
+  if (i < 0 || i >= state.shown.length) return;
+  // Which way the reader is moving, and nothing when there is nowhere to move
+  // from: an item opened from the grid flies out of its tile instead.
+  var dir = (current < 0 || current === i || reduceMotion()) ? 0 : (i > current ? 1 : -1);
+  if (dir === 0) clearStage(); else leaveStage(shownEl, dir);
+  current = i;
+  var it = state.shown[i];
+  shownEl = stageMedia(it);
+  stage.appendChild(shownEl);
+  if (dir !== 0) enterStage(shownEl, dir);
+
+  lbName.textContent = it.n;
+  lbCount.textContent = (i + 1) + " / " + state.shown.length;
+  var bits = [];
+  var d = dateOf(it);
+  if (d) bits.push(fmtDate(d));
+  if (it.w > 0 && it.h > 0) bits.push(it.w + " x " + it.h);
+  bits.push(fmtSize(it.z));
+  lbMeta.textContent = bits.join("  ·  ");
+  lbDown.setAttribute("href", it.d);
+  // Placed once the item is at rest: a box measured mid-flight is the one
+  // the transform is passing through.
+  hudHide();
+  settleHud(dir === 0 ? ZOOM_MS : STEP_MS);
+  lbReel.classList.toggle("hide", state.shown.length < 2);
+  renderStrip(i, dir);
+
+  // The lightbox is ONE history entry, replaced as you move: arrowing through
+  // 200 photos must not cost 200 presses of Back to leave. `own` marks an
+  // entry the gallery PUSHED, which has the grid behind it; an entry opened
+  // by a direct link to one item does not, and closing there must not leave
+  // the page. It lives in the history state so a Forward press back onto a
+  // pushed entry still knows.
+  // The grid's entry is marked before the lightbox's is pushed over it, and
+  // the mark belongs to the ENTRY: the way back must not bring the grid's own
+  // scroll position with it. The tile the reader lands on is scrolled into
+  // view at close, and the browser would then put the page back where it
+  // stood when the reader clicked in, which after a walk through the gallery
+  // is nowhere near that tile. The popstate handler puts auto back once the
+  // traversal is over, so a reload still restores.
+  if (hashMode === "push" && "scrollRestoration" in history) history.scrollRestoration = "manual";
+  if (hashMode === "push") history.pushState({lb: 1, own: 1}, "", "#" + it.s);
+  else if (hashMode === "replace") history.replaceState({lb: 1, own: ownEntry()}, "", "#" + it.s);
+
+  // Forward is where a reader is going, so the next clip buffers enough to
+  // start and the one behind settles for its metadata: holding two downloads
+  // open in both directions would spend a gallery's bandwidth on clips nobody
+  // has asked for.
+  preload(i + 1, "auto");
+  preload(i - 1, "metadata");
+  keepOnly(i);
+  armSlide();
+}
+
+// What is held for the neighbours, keyed by slug. A photo needs no element
+// (the image cache is the preload); a clip keeps ITS OWN element, because a
+// second one asking for the same URL starts its buffering over.
+var ahead = {};
+
+function preload(i, how){
+  if (i < 0 || i >= state.shown.length) return;
+  var it = state.shown[i];
+  if (it.k === "photo") {
+    var img = new Image();
+    img.src = it.v;
+    return;
+  }
+  if (it.k !== "video" && it.k !== "audio") return;
+  if (ahead[it.s]) return;
+  ahead[it.s] = mediaEl(it, how);
+}
+
+// Only the two neighbours are held. Arrowing through a gallery would
+// otherwise leave a download running for every clip passed.
+function keepOnly(i){
+  var keep = {};
+  if (i > 0) keep[state.shown[i - 1].s] = 1;
+  if (i + 1 < state.shown.length) keep[state.shown[i + 1].s] = 1;
+  for (var slug in ahead) {
+    if (!ahead.hasOwnProperty(slug) || keep[slug]) continue;
+    release(ahead[slug]);
+    delete ahead[slug];
+  }
+}
+
+function dropAhead(){
+  for (var slug in ahead) {
+    if (ahead.hasOwnProperty(slug)) release(ahead[slug]);
+  }
+  ahead = {};
+}
+
+/* ---------- the flight ---------- */
+
+/* Opening is the tile GROWING into the screen and closing is it going back,
+   rather than a picture appearing over the grid: what the reader clicked and
+   what they are now looking at are visibly the same thing, and closing hands
+   them back to the row they were reading.
+   It is a FLIP: the element is laid out where it belongs, then put back at the
+   tile's box with a transform and released. Measuring beats animating width
+   and height, which would relayout on every frame. The scale is per axis
+   because a tile CROPS (object-fit: cover) while the stage shows the whole
+   picture, so the two boxes rarely share a shape. */
+var ZOOM_MS = 240;
+var shutTimer = null;
+
+function reduceMotion(){
+  return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+// The tile an item flies to or from, or nothing when there is none on screen
+// to fly to: a deep link opens with the grid never drawn, and a filter can
+// leave the item without a tile at all.
+function tileRect(i){
+  var all = tiles();
+  if (i < 0 || i >= all.length || reduceMotion()) return null;
+  var r = all[i].getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  if (r.bottom <= 0 || r.top >= window.innerHeight) return null;
+  return r;
+}
+
+function flightTo(from, to){
+  var sx = from.width / to.width, sy = from.height / to.height;
+  var dx = (from.left + from.width / 2) - (to.left + to.width / 2);
+  var dy = (from.top + from.height / 2) - (to.top + to.height / 2);
+  return "translate(" + dx.toFixed(1) + "px," + dy.toFixed(1) + "px) scale(" +
+         sx.toFixed(4) + "," + sy.toFixed(4) + ")";
+}
+
+// Out of the tile. The start state has to be painted before the transition is
+// armed, or the browser collapses the two into one frame and nothing moves:
+// two frames, because the first is the one the lightbox itself appears in.
+function flyOut(el, from){
+  if (!el || !from) return false;
+  var to = el.getBoundingClientRect();
+  if (to.width <= 0 || to.height <= 0) return false;
+  el.style.transition = "none";
+  el.style.transform = flightTo(from, to);
+  requestAnimationFrame(function(){
+    requestAnimationFrame(function(){
+      el.style.transition = "transform " + ZOOM_MS + "ms cubic-bezier(.2,.7,.3,1)";
+      el.style.transform = "none";
+      lb.classList.remove("veil");
+    });
+  });
+  return true;
+}
+
+// Back into it.
+function flyBack(el, to){
+  if (!el || !to) return false;
+  var from = el.getBoundingClientRect();
+  if (from.width <= 0 || from.height <= 0) return false;
+  el.style.transition = "transform " + ZOOM_MS + "ms cubic-bezier(.4,0,.2,1)";
+  el.style.transform = flightTo(to, from);
+  return true;
+}
+
+/* Locking the page takes its scrollbar away, and on a system that shows one
+   that is a column of the width the justified grid was laid out in: every
+   tile reflows under the lightbox, so what opens jumps and what closes flies
+   back to a box that has moved. The gutter is held open with padding for as
+   long as the lock lasts, which costs nothing where the scrollbar is an
+   overlay and measures zero. */
+function lockPage(){
+  var gutter = window.innerWidth - document.documentElement.clientWidth;
+  if (gutter > 0) document.documentElement.style.paddingRight = gutter + "px";
+  document.documentElement.classList.add("lbopen");
+}
+
+function unlockPage(){
+  document.documentElement.classList.remove("lbopen");
+  document.documentElement.style.paddingRight = "";
+}
+
+function openAt(i, hashMode, tile){
+  if (i < 0 || i >= state.shown.length) return;
+  // A lightbox still flying back to its tile is on its way out, so what
+  // follows is an open and not a move within one.
+  if (shutTimer !== null) hideBox();
+  var already = !lb.classList.contains("hide");
+  if (already && hashMode === "push") hashMode = "replace";
+  lastFocus = document.activeElement;
+  lockPage();
+  // Measured with the page already locked: hiding the scrollbar can move the
+  // grid under it, and the tile is being aimed at to the pixel.
+  var from = already || !tile ? null : tileRect(parseInt(tile.getAttribute("data-i"), 10));
+  if (from) lb.classList.add("veil");
+  lb.classList.remove("hide");
+  show(i, hashMode);
+  if (!flyOut(shownEl, from)) lb.classList.remove("veil");
+  lb.focus();
+}
+
+function hideBox(){
+  if (shutTimer !== null) { clearTimeout(shutTimer); shutTimer = null; }
+  hudHide();
+  clearStage();
+  dropAhead();
+  lb.classList.add("hide");
+  lb.classList.remove("veil");
+  unlockPage();
+}
+
+function close(fromPop){
+  if (lb.classList.contains("hide") || shutTimer !== null) return;
+  stopSlide();
+  // Where the reader actually IS, which is not where they came in: after
+  // arrowing through a gallery full screen, the cursor belongs on the picture
+  // that was on screen, not on the tile that opened the lightbox.
+  var landed = current;
+  var el = shownEl;
+  var playing = stage.querySelector("video, audio");
+  if (playing) playing.pause();
+  hudHide();
+  current = -1;
+  // Before the tile is measured: the cursor lands on it, which is what scrolls
+  // it back into view, and its box is only then where it will be.
+  if (landed >= 0) focusTileAt(landed);
+  else if (lastFocus && lastFocus.focus) lastFocus.focus();
+  if (flyBack(el, tileRect(landed))) {
+    lb.classList.add("veil");
+    shutTimer = setTimeout(function(){ shutTimer = null; hideBox(); }, ZOOM_MS);
+  } else {
+    hideBox();
+  }
+  if (fromPop || !history.state || !history.state.lb) return;
+  // Back is the way out of an entry the gallery pushed: it lands on the grid
+  // and keeps the history short. A direct link to one item IS the gallery's
+  // entry, so there is nothing behind it; the item is dropped from the
+  // address instead, which leaves the reader on the grid they were owed
+  // rather than on whatever page came before this one.
+  if (history.state.own) history.back();
+  else history.replaceState({}, "", location.pathname + location.search);
+}
+
+function ownEntry(){
+  return history.state && history.state.own ? 1 : 0;
+}
+
+function step(d){
+  if (state.shown.length === 0) return;
+  var next = current + d;
+  if (next < 0) next = state.shown.length - 1;
+  if (next >= state.shown.length) next = 0;
+  show(next, "replace");
+}
+
+function indexOfSlug(slug){
+  for (var i = 0; i < state.shown.length; i++) if (state.shown[i].s === slug) return i;
+  return -1;
+}
+
+function flash(msg){
+  lbFlash.textContent = msg;
+  lbFlash.classList.add("on");
+  setTimeout(function(){ lbFlash.classList.remove("on"); }, 1300);
+}
+
+function armSlide(){
+  if (slideTimer !== null) { clearTimeout(slideTimer); slideTimer = null; }
+  if (!slideOn) return;
+  var it = state.shown[current];
+  // A clip advances when it ENDS, not on a clock: cutting a video off
+  // mid-sentence is not a slideshow.
+  if (it && (it.k === "video" || it.k === "audio")) return;
+  slideTimer = setTimeout(function(){ step(1); }, SLIDE_MS);
+}
+
+function startSlide(){
+  slideOn = true;
+  lbPlay.setAttribute("aria-pressed", "true");
+  lbPlay.setAttribute("title", "Stop slideshow");
+  lbPlay.setAttribute("aria-label", "Stop slideshow");
+  armSlide();
+}
+
+function stopSlide(){
+  slideOn = false;
+  if (slideTimer !== null) { clearTimeout(slideTimer); slideTimer = null; }
+  lbPlay.setAttribute("aria-pressed", "false");
+  lbPlay.setAttribute("title", "Slideshow");
+  lbPlay.setAttribute("aria-label", "Slideshow");
+}
+
+/* ---------- the grid cursor ---------- */
+
+/* The grid is walked with the arrows and opened with Space, so a gallery
+   works without a mouse. FOCUS is the cursor rather than a class of our own:
+   the tiles are already links, so the browser gives them the ring, the tab
+   order and the accessible name, and the lightbox's close (which restores
+   focus) puts the cursor back on the picture that was being looked at. */
+
+/* The tiles in render order. Cached because the cursor asks for them several
+   times per keypress and a gallery holds thousands: the set only changes when
+   render() rebuilds the grid, which is where it is refreshed. */
+var tileList = [];
+
+function tiles(){ return tileList; }
+
+function focusedTile(){
+  var el = document.activeElement;
+  return el && el.classList && el.classList.contains("tile") ? el : null;
+}
+
+function focusTileAt(i){
+  var all = tiles();
+  if (i < 0 || i >= all.length) return;
+  // preventScroll, then scrollIntoView: focus() scrolls on its own terms, and
+  // "nearest" is what keeps the row being read where it is (a tile already on
+  // screen does not move at all). Letting both scroll costs two layouts and
+  // the wrong one wins.
+  all[i].focus({preventScroll: true});
+  if (all[i].scrollIntoView) all[i].scrollIntoView({block: "nearest"});
+}
+
+/* The tile one visual row up or down. The rows are ragged (each tile keeps
+   its own aspect, and a date heading can sit between two of them), so the
+   neighbour is found by geometry rather than by counting columns: the nearest
+   row in that direction, then the tile in it whose centre is closest. */
+function rowNeighbour(from, dir){
+  var all = tiles(), r = from.getBoundingClientRect();
+  var mid = (r.left + r.right) / 2, row = null, best = -1, bestDx = 0;
+  // Tiles are in reading order and rows stack downward, so only the tiles on
+  // the far side of this one can be in the next row: the walk starts at the
+  // neighbour and stops once it is past that row. One rect per tile examined,
+  // and on a large gallery that is a row's worth rather than the whole set.
+  var start = parseInt(from.getAttribute("data-i"), 10) + dir;
+  for (var i = start; i >= 0 && i < all.length; i += dir) {
+    var q = all[i].getBoundingClientRect();
+    if (dir > 0 ? q.top <= r.top + 1 : q.top >= r.top - 1) continue;
+    if (row === null) row = q.top;
+    else if (Math.abs(q.top - row) > 1) break;
+    var dx = Math.abs((q.left + q.right) / 2 - mid);
+    if (best < 0 || dx < bestDx) { best = i; bestDx = dx; }
+  }
+  return best;
+}
+
+function isSpace(key){ return key === " " || key === "Spacebar"; }
+
+/* A key meant for the sort menu is its own. */
+function typing(el){
+  if (!el || !el.tagName) return false;
+  return el.tagName === "INPUT" || el.tagName === "SELECT" || el.tagName === "TEXTAREA";
+}
+
+/* Along the grid in reading order. It CLAMPS rather than wrapping: the
+   lightbox is a carousel and wraps, but a cursor that jumps from the last
+   tile back to the first loses the reader's place. */
+/* The keys the grid answers. Tested before anything is collected: every other
+   keystroke that reaches the document while a tile has focus would otherwise
+   pay for the lookup and get nothing for it. */
+function gridKey(ev){
+  if (ev.key.indexOf("Arrow") !== 0 && ev.key !== "Home" && ev.key !== "End"
+      && !isSpace(ev.key) && ev.key !== "Enter") return;
+  var n = tiles().length;
+  if (n === 0) return;
+  var cur = focusedTile();
+  if (!cur) {
+    // The first arrow enters the grid, so the keyboard is reachable without
+    // tabbing to a tile first.
+    if (ev.key.indexOf("Arrow") === 0) { ev.preventDefault(); focusTileAt(0); }
+    return;
+  }
+  var i = parseInt(cur.getAttribute("data-i"), 10);
+  if (isNaN(i)) return;
+  if (ev.key === "ArrowRight") { ev.preventDefault(); focusTileAt(Math.min(i + 1, n - 1)); }
+  else if (ev.key === "ArrowLeft") { ev.preventDefault(); focusTileAt(Math.max(i - 1, 0)); }
+  else if (ev.key === "ArrowDown") { ev.preventDefault(); focusTileAt(rowNeighbour(cur, 1)); }
+  else if (ev.key === "ArrowUp") { ev.preventDefault(); focusTileAt(rowNeighbour(cur, -1)); }
+  else if (ev.key === "Home") { ev.preventDefault(); focusTileAt(0); }
+  else if (ev.key === "End") { ev.preventDefault(); focusTileAt(n - 1); }
+  else if (isSpace(ev.key) || ev.key === "Enter") { ev.preventDefault(); openAt(i, "push", cur); }
+}
+
+/* ---------- wiring ---------- */
+
+groupsEl.addEventListener("click", function(ev){
+  var t = ev.target;
+  while (t && t !== groupsEl && !(t.classList && t.classList.contains("tile"))) t = t.parentNode;
+  if (!t || t === groupsEl) return;
+  var i = parseInt(t.getAttribute("data-i"), 10);
+  if (isNaN(i)) return;
+  ev.preventDefault();
+  openAt(i, "push", t);
+});
+
+chipsEl.addEventListener("click", function(ev){
+  var t = ev.target;
+  while (t && t !== chipsEl && !(t.classList && t.classList.contains("chip"))) t = t.parentNode;
+  if (!t || t === chipsEl) return;
+  state.kind = t.getAttribute("data-k");
+  render();
+});
+
+sortEl.addEventListener("change", function(){
+  state.sort = sortEl.value;
+  render();
+});
+
+var wasNarrow = window.innerWidth < NARROW_AT;
+var resizeTimer = null;
+window.addEventListener("resize", function(){
+  // Flexbox justifies every other resize by itself. Only crossing the
+  // breakpoint changes a number the script computed.
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(function(){
+    refitStage();
+    placeHud();
+    var narrow = window.innerWidth < NARROW_AT;
+    if (narrow === wasNarrow) return;
+    wasNarrow = narrow;
+    render();
+    if (current >= 0) renderStrip(current);
+  }, 150);
+});
+
+document.getElementById("lbclose").addEventListener("click", function(){ close(false); });
+lbPlay.addEventListener("click", function(){
+  if (slideOn) stopSlide(); else startSlide();
+});
+lbCopy.addEventListener("click", function(){
+  var it = state.shown[current];
+  if (!it) return;
+  var url = location.origin + location.pathname + location.search + "#" + it.s;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(function(){ flash("Link copied"); },
+                                           function(){ flash("Could not copy"); });
+  } else {
+    flash("Could not copy");
+  }
+});
+
+stage.addEventListener("click", function(ev){
+  if (ev.target === stage) close(false);
+});
+
+lb.addEventListener("mousemove", function(ev){ if (overItem(ev.target)) hudPoke(); });
+lb.addEventListener("touchstart", hudPoke, {passive: true});
+
+/* Clicking a clip's own controls parks focus on the video, and from there
+   Left and Right scrub it: Chrome's controls live in a shadow tree this page
+   cannot see into, where the slider answers the key and NOTHING reaches the
+   document, not even a capture listener on it. Focus comes straight back to
+   the dialog, which costs the controls their own keyboard (they are reached
+   by pointer) and keeps the arrows the gallery's. The click itself is
+   untouched: the seek lands, and dragging the scrubber still works, because
+   the slider tracks the pointer rather than the focus. */
+stage.addEventListener("focusin", function(ev){
+  var tag = ev.target.tagName;
+  if (tag === "VIDEO" || tag === "AUDIO") lb.focus();
+});
+
+/* In the CAPTURE phase, which is what makes the lightbox's keys ITS keys:
+   whatever inside the dialog holds focus, the key is answered here and goes
+   no further. */
+document.addEventListener("keydown", function(ev){
+  if (lb.classList.contains("hide")) {
+    if (typing(document.activeElement)) return;
+    gridKey(ev);
+    return;
+  }
+  // Fullscreen is the clip's own screen, and the keys there are its own.
+  if (document.fullscreenElement || document.webkitFullscreenElement) return;
+  // Space opened it, so Space closes it. That costs the video element its
+  // native play/pause on the same key, which is the trade the one-key
+  // open-and-close is worth: the controls and click-to-play still toggle it.
+  if (ev.key !== "Escape" && !isSpace(ev.key) && ev.key !== "ArrowRight"
+      && ev.key !== "ArrowLeft" && ev.key !== "Home" && ev.key !== "End") return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  hudPoke();
+  if (ev.key === "Escape" || isSpace(ev.key)) close(false);
+  else if (ev.key === "ArrowRight") { stopSlide(); step(1); }
+  else if (ev.key === "ArrowLeft") { stopSlide(); step(-1); }
+  else if (ev.key === "Home") { stopSlide(); show(0, "replace"); }
+  else { stopSlide(); show(state.shown.length - 1, "replace"); }
+}, true);
+
+/* Touch: swipe across to move, swipe down to close. Bound on the stage and
+   passive, so the browser keeps pinch-zoom and the media controls keep their
+   own gestures. */
+var tx = 0, ty = 0, tracking = false;
+stage.addEventListener("touchstart", function(ev){
+  tracking = ev.touches.length === 1;
+  if (!tracking) return;
+  tx = ev.touches[0].clientX;
+  ty = ev.touches[0].clientY;
+}, {passive: true});
+stage.addEventListener("touchend", function(ev){
+  if (!tracking || !ev.changedTouches.length) return;
+  tracking = false;
+  var dx = ev.changedTouches[0].clientX - tx;
+  var dy = ev.changedTouches[0].clientY - ty;
+  if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy)) {
+    stopSlide();
+    step(dx < 0 ? 1 : -1);
+  } else if (dy > 90 && Math.abs(dy) > Math.abs(dx)) {
+    close(false);
+  }
+}, {passive: true});
+
+window.addEventListener("popstate", function(){
+  // The browser restores the entry's scroll position AFTER this event, so
+  // auto goes back on a task of its own, past that step.
+  if ("scrollRestoration" in history && history.scrollRestoration === "manual") {
+    setTimeout(function(){ history.scrollRestoration = "auto"; }, 0);
+  }
+  var slug = location.hash.replace("#", "");
+  if (!slug) { close(true); return; }
+  var i = indexOfSlug(slug);
+  if (i < 0) { close(true); return; }
+  if (lb.classList.contains("hide")) openAt(i, "none"); else show(i, "none");
+});
+
+/* ---------- boot ---------- */
+
+function anyTaken(){
+  for (var i = 0; i < ITEMS.length; i++) if (ITEMS[i].ta) return true;
+  return false;
+}
+
+// A phone album wants time order; a folder of renders wants its filenames.
+state.sort = anyTaken() ? "date-desc" : "name-asc";
+sortEl.value = state.sort;
+
+var total = subEl.textContent.split("·").pop().trim();
+var c0 = counts(), parts = [];
+for (var ki = 0; ki < KINDS.length; ki++) {
+  var kk = KINDS[ki];
+  if (!c0[kk]) continue;
+  parts.push(c0[kk] + " " + (c0[kk] === 1 ? ONE[kk] : lower(LABELS[kk])));
+}
+if (parts.length) subEl.textContent = parts.join(", ") + "  ·  " + total;
+
+render();
+
+var startSlug = location.hash.replace("#", "");
+if (startSlug) {
+  var si = indexOfSlug(startSlug);
+  if (si >= 0) openAt(si, "replace");
+}
+})();
+</script>
+</body>
+</html>

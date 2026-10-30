@@ -1,0 +1,62 @@
+{
+  "mode": "custom",
+  "domain": "share.example.com",
+  "provider": "ionos",
+  "providerZone": "example.com",
+  "recipeVersion": 1,
+  "secrets": {
+    "ionos_key": "TEST_PREFIX.TEST_SECRET"
+  },
+  "requests": [
+    {
+      "name": "Find share.example.com",
+      "method": "GET",
+      "url": "https://api.hosting.ionos.com/dns/v1/zones/11af3414-ebba-11e9-8df5-66fbe8a334b4?recordName=share.example.com\u0026recordType=A",
+      "headers": {
+        "X-API-Key": "{{.ionos_key}}"
+      },
+      "successJSON": {
+        "records.0.name": "share.example.com",
+        "records.0.type": "A"
+      },
+      "capture": {
+        "share_record": "records.0.id"
+      }
+    },
+    {
+      "name": "Update share.example.com",
+      "method": "PUT",
+      "url": "https://api.hosting.ionos.com/dns/v1/zones/11af3414-ebba-11e9-8df5-66fbe8a334b4/records/{{.share_record}}",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-API-Key": "{{.ionos_key}}"
+      },
+      "body": "{\"content\":\"{{.ipv4}}\",\"ttl\":60,\"disabled\":false}"
+    },
+    {
+      "name": "Find files.share.example.com",
+      "method": "GET",
+      "url": "https://api.hosting.ionos.com/dns/v1/zones/11af3414-ebba-11e9-8df5-66fbe8a334b4?recordName=files.share.example.com\u0026recordType=A",
+      "headers": {
+        "X-API-Key": "{{.ionos_key}}"
+      },
+      "successJSON": {
+        "records.0.name": "files.share.example.com",
+        "records.0.type": "A"
+      },
+      "capture": {
+        "files_record": "records.0.id"
+      }
+    },
+    {
+      "name": "Update files.share.example.com",
+      "method": "PUT",
+      "url": "https://api.hosting.ionos.com/dns/v1/zones/11af3414-ebba-11e9-8df5-66fbe8a334b4/records/{{.files_record}}",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-API-Key": "{{.ionos_key}}"
+      },
+      "body": "{\"content\":\"{{.ipv4}}\",\"ttl\":60,\"disabled\":false}"
+    }
+  ]
+}
