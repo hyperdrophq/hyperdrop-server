@@ -1,0 +1,571 @@
+#!/bin/sh
+# Sourced by every package script: the facts that differ between the DSM
+# generations, and the checks and chores more than one script needs.
+# build-spk.sh stamps @DSM@ with the generation a package is built for
+# (arches.tsv), so one script tree serves both.
+#
+# DSM_MAJOR  the generation, 6 or 7.
+# VAR        the package's data directory, which outlives the package: an
+#            upgrade replaces the whole target dir, and an uninstall keeps
+#            the data unless its wizard says otherwise.
+#
+# DSM 7 hands the scripts SYNOPKG_PKGVAR (/var/packages/<pkg>/var, a link
+# into @appdata on the package's volume), though not preinst. DSM 6 has no
+# such directory, so its package keeps the same layout by hand:
+# @appdata/hyperdrop on the volume the package is installed on, never on the
+# system partition.
+#
+# A script that can run without VAR (preinst, postuninst) sets
+# COMMON_OPTIONAL_VAR=1 before sourcing this; every other one stops here
+# when VAR cannot be told.
+# shellcheck disable=SC2034 # PKG, TARGET and VAR are for the scripts that source this
+# shellcheck disable=SC2154 # the wizard_* answers and SYNOPKG_* facts come from DSM
+PKG="hyperdrop"
+DSM_MAJOR="@DSM@"
+TARGET="${SYNOPKG_PKGDEST:-/var/packages/$PKG/target}"
+
+# data_dir sets VAR, and answers 1 when this generation's facts do not name it.
+data_dir() {
+    VAR=""
+    if [ "$DSM_MAJOR" = "6" ]; then
+        # The install volume: DSM 6 exports it to the install scripts, and the
+        # target dir (/volumeN/@appstore/hyperdrop) names it everywhere else.
+        VOL="${SYNOPKG_PKGDEST_VOL:-}"
+        if [ -z "$VOL" ]; then
+            dest=$(readlink -f "$TARGET" 2>/dev/null || echo "$TARGET")
+            VOL=$(echo "$dest" | sed -n 's#^\(/volume[^/]*\)/.*#\1#p')
+        fi
+        [ -n "$VOL" ] && VAR="$VOL/@appdata/$PKG"
+    else
+        VAR="${SYNOPKG_PKGVAR:-}"
+    fi
+    [ -n "$VAR" ]
+}
+
+# data_path prints the directory the server keeps its data in and answers 1
+# when it names none. DSM 6 keeps it under VAR. On DSM 7 it is the shared
+# folder HYPERDROP_SHARED_FOLDER names, which DSM links under the package's
+# shares directory and may move to another volume, so the link is resolved
+# at every call. HYPERDROP_TEST_SHARES is the test seam for that directory.
+data_path() {
+    if [ "$DSM_MAJOR" = "6" ]; then
+        printf '%s\n' "$VAR/data"
+        return 0
+    fi
+    [ -n "${HYPERDROP_SHARED_FOLDER:-}" ] || return 1
+    readlink -f "${HYPERDROP_TEST_SHARES:-/var/packages/$PKG/shares}/$HYPERDROP_SHARED_FOLDER" 2>/dev/null
+}
+
+# kept_confs prints the conf of every install whose data outlived it, when it
+# is a plain file (plain_file). When DSM names the install volume (DSM 6,
+# every script) only that volume counts, because the package reads its data
+# from the volume it is installed on and a conf kept on another one would
+# admit an install that cannot start; when it names none (DSM 7's preinst)
+# every volume does. DSM 7's link to the data counts while it still exists.
+kept_confs() {
+    if [ -n "${SYNOPKG_PKGDEST_VOL:-}" ]; then
+        set -- "$SYNOPKG_PKGDEST_VOL/@appdata/$PKG"
+    else
+        set -- /volume[0-9]*/@appdata/"$PKG"
+    fi
+    for d in "$@" "/var/packages/$PKG/var"; do
+        plain_file "$d/hyperdrop.conf" && printf '%s\n' "$d/hyperdrop.conf"
+    done
+    return 0
+}
+
+# answer_address prints the address the wizard answered as "free <name>" or
+# "domain <fqdn>" (the domain lowercased, the only spelling the server takes),
+# and nothing when the field is empty. The wizard's radio says which kind;
+# an install from a terminal sets no radio, and then a dot makes it a domain.
+answer_address() {
+    [ -n "$wizard_address" ] || return 0
+    if [ "$wizard_kind_free" = "true" ]; then
+        kind="free"
+    elif [ "$wizard_kind_domain" = "true" ]; then
+        kind="domain"
+    else
+        case "$wizard_address" in
+        *.*) kind="domain" ;;
+        *) kind="free" ;;
+        esac
+    fi
+    if [ "$kind" = "domain" ]; then
+        printf 'domain %s\n' "$(printf '%s' "$wizard_address" | tr '[:upper:]' '[:lower:]')"
+    else
+        printf 'free %s\n' "$wizard_address"
+    fi
+}
+
+# validate_answers checks every wizard answer postinst writes, printing the
+# first refusal and answering 1. start-stop-status SOURCES the conf, so each
+# value is held to characters that can neither leave its line nor its quotes,
+# and to the shape the server itself demands at boot: a domain name, the
+# names service's free-name shape, the server's username rule, a port, and
+# for the proxy list IP addresses and CIDR ranges.
+validate_answers() {
+    if [ -n "$wizard_address" ]; then
+        case "$(answer_address)" in
+        domain*)
+            domain_bad="A domain name, for example share.example.com."
+            case "$wizard_address" in
+            *[!A-Za-z0-9.-]* | [.-]* | *[.-] | *..* | *.-* | *-.*)
+                echo "$domain_bad"
+                return 1
+                ;;
+            *.*) ;;
+            *)
+                echo "$domain_bad"
+                return 1
+                ;;
+            esac
+            if [ "${#wizard_address}" -gt 253 ]; then
+                echo "$domain_bad"
+                return 1
+            fi
+            ;;
+        *)
+            name_bad="5-32 lowercase letters, digits and single hyphens, for example alice."
+            case "$wizard_address" in
+            *[!a-z0-9-]* | -* | *- | *--*)
+                echo "$name_bad"
+                return 1
+                ;;
+            esac
+            if [ "${#wizard_address}" -lt 5 ] || [ "${#wizard_address}" -gt 32 ]; then
+                echo "$name_bad"
+                return 1
+            fi
+            ;;
+        esac
+    fi
+    if [ -n "$wizard_shared_folder" ]; then
+        folder_bad="The shared folder name is 1 to 32 letters, digits, spaces, dashes or underscores, and does not start with a space."
+        case "$wizard_shared_folder" in
+        *[!A-Za-z0-9\ _-]* | [\ .]*)
+            echo "$folder_bad"
+            return 1
+            ;;
+        esac
+        if [ "${#wizard_shared_folder}" -gt 32 ]; then
+            echo "$folder_bad"
+            return 1
+        fi
+    fi
+    if [ -n "$wizard_admin_user" ]; then
+        case "$wizard_admin_user" in
+        *[!a-z0-9._-]*)
+            echo "The Admin username is 3 to 32 characters of a-z, 0-9, dot, dash or underscore."
+            return 1
+            ;;
+        esac
+        if [ "${#wizard_admin_user}" -lt 3 ] || [ "${#wizard_admin_user}" -gt 32 ]; then
+            echo "The Admin username is 3 to 32 characters of a-z, 0-9, dot, dash or underscore."
+            return 1
+        fi
+    fi
+    for port in "$wizard_http_port" "$wizard_https_port"; do
+        [ -n "$port" ] || continue
+        case "$port" in
+        *[!0-9]* | 0*)
+            echo "A port is a number from 1 to 65535."
+            return 1
+            ;;
+        esac
+        if [ "${#port}" -gt 5 ] || [ "$port" -gt 65535 ]; then
+            echo "A port is a number from 1 to 65535."
+            return 1
+        fi
+    done
+    # The two ports must differ, an unanswered one standing for the port the
+    # conf the answers merge into names, or for the package default.
+    if [ -n "$wizard_http_port" ] || [ -n "$wizard_https_port" ]; then
+        merged=""
+        if [ -n "$VAR" ] && plain_file "$VAR/hyperdrop.conf"; then
+            merged="$VAR/hyperdrop.conf"
+        elif [ "$SYNOPKG_PKG_STATUS" = "INSTALL" ]; then
+            merged=$(kept_confs | sed -n 1p)
+        fi
+        http=${wizard_http_port:-$(conf_value_of "$merged" HYPERDROP_HTTP_ADDR)}
+        https=${wizard_https_port:-$(conf_value_of "$merged" HYPERDROP_HTTPS_ADDR)}
+        http=${http##*:}
+        https=${https##*:}
+        if [ "${http:-5080}" = "${https:-5443}" ]; then
+            echo "The HTTP and HTTPS ports must differ."
+            return 1
+        fi
+    fi
+    [ -n "$wizard_trusted_proxies" ] || return 0
+    # Proxy address: IP addresses or CIDR ranges separated by commas (spaces
+    # allowed). The whole value is held to the address characters first,
+    # then each item to an IPv4 address (octets 0-255, /1-32) or an IPv6 one
+    # (hex and colons, an IPv4 tail allowed, /1-128). /0 would trust the
+    # whole internet, and a value holding no item at all (spaces, commas)
+    # would read as "no proxy" while the owner meant to name one.
+    proxy_bad="Proxy address must be IP addresses separated by commas, for example 192.168.1.10 or 127.0.0.1."
+    case "$wizard_trusted_proxies" in *[!0-9A-Fa-f.:/,\ ]*)
+        echo "$proxy_bad"
+        return 1
+        ;;
+    esac
+    items=0
+    rest="$wizard_trusted_proxies,"
+    while [ -n "$rest" ]; do
+        item=${rest%%,*}
+        rest=${rest#*,}
+        item=$(printf '%s' "$item" | tr -d ' ')
+        [ -n "$item" ] || continue
+        items=$((items + 1))
+        valid_proxy_item "$item" || {
+            echo "$proxy_bad"
+            return 1
+        }
+    done
+    [ "$items" -gt 0 ] || {
+        echo "$proxy_bad"
+        return 1
+    }
+}
+
+# refuse prints why an install or upgrade stops and stops it. The reason goes
+# to SYNOPKG_TEMP_LOGFILE, the ONLY channel Package Center reads back: stderr
+# is discarded, and without it the installer shows only its own bare "Failed
+# to install the package". A terminal synopkg shows it in its JSON message.
+refuse() {
+    printf '%s\n' "$1" >&2
+    [ -n "$SYNOPKG_TEMP_LOGFILE" ] && printf '%s\n' "$1" > "$SYNOPKG_TEMP_LOGFILE"
+    exit 1
+}
+
+# reset_log empties the temp log DSM shows as a script's error, so a refusal
+# left by an earlier run is not shown after a later success. Only a plain
+# file is emptied here; a link or a file linked from elsewhere is not
+# followed by this truncation.
+reset_log() {
+    [ -n "$SYNOPKG_TEMP_LOGFILE" ] || return 0
+    ! plain_file "$SYNOPKG_TEMP_LOGFILE" || : > "$SYNOPKG_TEMP_LOGFILE"
+}
+
+# refuse_answers REASON refuses an install or upgrade over answers_refusal's
+# reason. DSM 6 stops the installed package before preupgrade and does not
+# start it again after a refusal, so an upgrade's refusal says so.
+refuse_answers() {
+    if [ "$DSM_MAJOR" = "6" ] && [ "$SYNOPKG_PKG_STATUS" = "UPGRADE" ]; then
+        refuse "$1 HyperDrop is stopped: start it again in Package Center."
+    fi
+    refuse "$1"
+}
+
+# conf_value_of FILE KEY prints the value KEY has in the conf FILE, without
+# its quotes, and nothing when the file or the key is absent. Only a plain
+# file (plain_file) is read. Where stat prints device, inode and link count
+# and /proc exposes a descriptor's file, the file is opened once onto
+# descriptor 9 and read only from that descriptor, and read at all only when
+# the opened file is the one the path names and has no other name (a name
+# swapped for a link after the check opens a different file or a linked one,
+# and reads nothing). A writable file is opened read-write, which neither
+# truncates nor blocks on a pipe swapped in for it; any other is opened
+# read-only; an open the system refuses ends the subshell with nothing read,
+# as a shell does for a failed redirection of exec. Without stat or /proc the
+# plain file is read through its path.
+conf_value_of() {
+    plain_file "$1" || return 0
+    (
+        if [ -w "$1" ]; then
+            exec 2>/dev/null 9<>"$1"
+        else
+            exec 2>/dev/null 9<"$1"
+        fi
+        named=$(stat -c %d:%i "$1" 2>/dev/null)
+        opened=$(stat -L -c %d:%i /proc/self/fd/9 2>/dev/null)
+        if [ -n "$named" ] && [ -n "$opened" ]; then
+            [ "$named" = "$opened" ] || exit 0
+            links=$(stat -L -c %h /proc/self/fd/9 2>/dev/null)
+            [ -z "$links" ] || [ "$links" = 1 ] || exit 0
+        fi
+        sed -n "s/^$2=//p" <&9 | sed -n '1{s/^"\(.*\)"$/\1/;p;}'
+    )
+    return 0
+}
+
+# free_name_of FILE prints the free name a conf holds, and nothing without one.
+free_name_of() {
+    conf_value_of "$1" HYPERDROP_DDNS_NAME
+}
+
+# lookup_refusal NAME prints why the names registry says NAME can never be a
+# free name (a length, character, hyphen or reserved-word rule), and nothing
+# for a name that is taken or free, or when there is no answer: an
+# unreachable registry must not stop an install. No JSON tool is on a NAS, so
+# the body is read with sed.
+lookup_refusal() {
+    [ -z "$HYPERDROP_PREINST_NO_LOOKUP" ] || return 0
+    command -v curl > /dev/null 2>&1 || return 0
+    body=$(curl -fsS --max-time 8 "${HYPERDROP_NAMES_URL:-https://api.gethyperdrop.com}/v1/available?name=$1" 2> /dev/null) || return 0
+    case "$body" in
+    *'"available":false'* | *'"available": false'*) ;;
+    *) return 0 ;;
+    esac
+    why=$(printf '%s' "$body" | sed -n 's/.*"reason" *: *"\([^"]*\)".*/\1/p')
+    case "$why" in
+    length:* | characters:* | hyphen:* | reserved:*)
+        why=${why#*:}
+        why=${why# }
+        printf '%s\n' "$why"
+        ;;
+    esac
+    return 0
+}
+
+# answers_refusal prints the first reason the wizard answers cannot be
+# installed or upgraded to and answers 1, or prints nothing and answers 0.
+# preinst runs it on every status and preupgrade on an upgrade, because DSM 7
+# removes the installed version between the two: a refusal in preupgrade
+# leaves it in place. HYPERDROP_TEST_VOLUMES is the test seam for the volume
+# glob.
+answers_refusal() {
+    validate_answers || return 1
+
+    # A DSM 7 upgrade keeps the shared folder it has: a name that differs
+    # from the conf's is refused, and no name (an update that runs without
+    # the wizard) keeps the current one.
+    if [ "$DSM_MAJOR" = "7" ] && [ "$SYNOPKG_PKG_STATUS" = "UPGRADE" ] && [ -n "$wizard_shared_folder" ] && data_dir; then
+        kept_folder=$(conf_get HYPERDROP_SHARED_FOLDER)
+        if [ -n "$kept_folder" ] && [ "$wizard_shared_folder" != "$kept_folder" ]; then
+            echo "The shared folder cannot change in an upgrade. Move it from HyperDrop's DSM page."
+            return 1
+        fi
+    fi
+
+    # A DSM 7 reinstall over kept data keeps that data's shared folder: the
+    # merged conf goes on naming it, so another name would have DSM create a
+    # folder the server never reads. The install wizard pre-fills the kept
+    # name, and a name any kept conf holds is accepted.
+    if [ "$DSM_MAJOR" = "7" ] && [ "$SYNOPKG_PKG_STATUS" = "INSTALL" ] && [ -n "$wizard_shared_folder" ]; then
+        kept_folder=""
+        for c in $(kept_confs); do
+            f=$(conf_value_of "$c" HYPERDROP_SHARED_FOLDER)
+            [ -n "$f" ] || continue
+            if [ "$f" = "$wizard_shared_folder" ]; then
+                kept_folder=""
+                break
+            fi
+            [ -n "$kept_folder" ] || kept_folder=$f
+        done
+        if [ -n "$kept_folder" ]; then
+            echo "The shared folder cannot change in a reinstall. Use $kept_folder, or uninstall with Delete data first."
+            return 1
+        fi
+    fi
+
+    # A free name answer must not move a server that already has one to
+    # another (the app changes it), and must be a name the registry could
+    # ever issue.
+    address=$(answer_address)
+    case "$address" in
+    free*)
+        name=${address#free }
+        held=""
+        if [ "$SYNOPKG_PKG_STATUS" = "INSTALL" ]; then
+            for c in $(kept_confs); do
+                held=$(free_name_of "$c")
+                [ -n "$held" ] && break
+            done
+        elif data_dir; then
+            held=$(free_name_of "$VAR/hyperdrop.conf")
+        fi
+        if [ -n "$held" ] && [ "$held" != "$name" ]; then
+            echo "Change your free name in the HyperDrop app."
+            return 1
+        fi
+        # The name the server already holds is its own and is not asked
+        # about. On an upgrade the registry is asked here twice, by
+        # preupgrade and by preinst; an unanswered lookup never blocks either.
+        why=""
+        [ "$name" = "$held" ] || why=$(lookup_refusal "$name")
+        if [ -n "$why" ]; then
+            echo "$name.hyperdrop.link cannot be used: $why."
+            return 1
+        fi
+        ;;
+    esac
+
+    # On DSM 7 the shared folder the wizard names may already exist; it is
+    # accepted only when it holds HyperDrop's marker (a reinstall).
+    if [ "$DSM_MAJOR" = "7" ] && [ -n "$wizard_shared_folder" ]; then
+        for v in ${HYPERDROP_TEST_VOLUMES:-/volume[0-9]*}; do
+            f="$v/$wizard_shared_folder"
+            [ -d "$f" ] || continue
+            if [ ! -e "$f/.hyperdrop" ]; then
+                echo "The shared folder $wizard_shared_folder already exists and does not hold HyperDrop data. Choose another name."
+                return 1
+            fi
+        done
+    fi
+    return 0
+}
+
+valid_bits() { # $1 = bits or empty, $2 = max
+    [ -z "$1" ] && return 0
+    case "$1" in *[!0-9]* | 0*) return 1 ;; esac
+    [ "${#1}" -le 3 ] && [ "$1" -le "$2" ]
+}
+
+valid_ipv4() {
+    printf '%s\n' "$1" | grep -Eq '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' || return 1
+    for octet in $(printf '%s\n' "$1" | tr '.' ' '); do
+        [ "${#octet}" -eq 1 ] || case "$octet" in 0*) return 1 ;; esac
+        [ "$octet" -le 255 ] || return 1
+    done
+}
+
+valid_proxy_item() {
+    addr=${1%%/*}
+    bits=""
+    case "$1" in */*) bits=${1#*/} ;; esac
+    case "$1" in */) return 1 ;; esac
+    case "$addr" in
+    *:*)
+        printf '%s\n' "$addr" | grep -Eq '^[0-9A-Fa-f:]*:[0-9A-Fa-f:]*(:[0-9.]+)?$' || return 1
+        [ "$addr" != ":" ] || return 1
+        case "$addr" in *.*) valid_ipv4 "${addr##*:}" || return 1 ;; esac
+        valid_bits "$bits" 128
+        ;;
+    *) valid_ipv4 "$addr" && valid_bits "$bits" 32 ;;
+    esac
+}
+
+# plain_file answers 0 for a regular file that is neither a link nor linked
+# from anywhere else. The package user owns VAR, so on DSM 6, where postinst
+# runs as root, any name in it may be a link the service planted to a root
+# file; root reads, writes and re-owns only a plain one.
+plain_file() {
+    [ -f "$1" ] && [ ! -L "$1" ] || return 1
+    # shellcheck disable=SC2012 # one file, and ls is on every DSM
+    [ "$(ls -ld "$1" 2>/dev/null | awk '{print $2}')" = "1" ]
+}
+
+# write_file PATH MODE writes standard input to PATH through a new file in
+# the same directory renamed over it, so a link planted at PATH is replaced,
+# never followed.
+write_file() {
+    tmp=$(mktemp "$(dirname "$1")/.${1##*/}.XXXXXX") || return 1
+    if cat > "$tmp" && chmod "$2" "$tmp" && mv -f "$tmp" "$1"; then
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+# write_var NAME MODE writes standard input to $VAR/NAME through write_file.
+write_var() {
+    write_file "$VAR/$1" "$2"
+}
+
+# write_port_conf makes DSM's port definition for the package list the ports
+# the conf names (5080 and 5443 for one it does not name), so DSM's firewall
+# rules and port-forward helper see the ports the server listens on. It
+# rewrites the package's copy through a new file and the one DSM keeps in
+# services.d in place, because that directory belongs to root while the file
+# in it belongs to the package user; each only when it is a plain file and its
+# text would change. A port that is not a number from 1 to 65535, or two
+# equal ports, which the server cannot listen on, leave both files as they
+# are, as DSM parses them. Best-effort: a path this user cannot
+# write is left as it is and the script goes on. HYPERDROP_TEST_SERVICES_DIR
+# is the test seam for services.d.
+write_port_conf() {
+    http=$(conf_get HYPERDROP_HTTP_ADDR)
+    https=$(conf_get HYPERDROP_HTTPS_ADDR)
+    http=${http##*:}
+    https=${https##*:}
+    for port in "$http" "$https"; do
+        case "$port" in
+        '') ;;
+        *[!0-9]* | 0*) return 0 ;;
+        *) { [ "${#port}" -le 5 ] && [ "$port" -le 65535 ]; } || return 0 ;;
+        esac
+    done
+    [ "${http:-5080}" != "${https:-5443}" ] || return 0
+    ports="${http:-5080},${https:-5443}"
+    text=$(printf '[%s]\ntitle="HyperDrop"\ndesc="Self-hosted file sharing for the HyperDrop apps"\nport_forward="yes"\ndst.ports="%s/tcp"' "$PKG" "$ports")
+    f="$TARGET/port_conf/$PKG.sc"
+    if plain_file "$f" && [ "$(cat "$f" 2>/dev/null)" != "$text" ]; then
+        printf '%s\n' "$text" | write_file "$f" 644 2>/dev/null
+    fi
+    f="${HYPERDROP_TEST_SERVICES_DIR:-/usr/local/etc/services.d}/$PKG.sc"
+    if plain_file "$f" && [ "$(cat "$f" 2>/dev/null)" != "$text" ]; then
+        printf '%s\n' "$text" 2>/dev/null > "$f"
+    fi
+    return 0
+}
+
+# conf_get KEY prints the value KEY has in the conf, without its quotes, and
+# nothing when the conf (read only as a plain file) or the key is absent.
+conf_get() {
+    plain_file "$VAR/hyperdrop.conf" || return 0
+    sed -n "s/^$1=//p" "$VAR/hyperdrop.conf" | sed -n '1{s/^"\(.*\)"$/\1/;p;}'
+}
+
+# conf_set KEY VALUE rewrites the one line KEY has in the conf (adding it
+# when absent) and leaves every other line as it was. The proxy list is
+# written in double quotes, as it may hold spaces (so may the shared folder's
+# name); every other value is
+# unquoted. The conf is read only when it is a plain file and is written
+# through write_var, so a link planted at it is replaced, never followed. The
+# new text is built aside first, so a failure leaves the conf untouched. The
+# callers validate the values first (validate_answers); conf_set does not.
+conf_set() {
+    if [ "$1" = "HYPERDROP_TRUSTED_PROXIES" ] || [ "$1" = "HYPERDROP_SHARED_FOLDER" ]; then
+        CONF_LINE="$1=\"$2\""
+    else
+        CONF_LINE="$1=$2"
+    fi
+    export CONF_LINE
+    aside=$(mktemp "$VAR/.conf_set.XXXXXX") || return 1
+    src=/dev/null
+    plain_file "$VAR/hyperdrop.conf" && src="$VAR/hyperdrop.conf"
+    awk -v key="$1=" '
+        index($0, key) == 1 { if (!done) print ENVIRON["CONF_LINE"]; done = 1; next }
+        { print }
+        END { if (!done) print ENVIRON["CONF_LINE"] }
+    ' "$src" > "$aside" || { rm -f "$aside"; return 1; }
+    write_var hyperdrop.conf 600 < "$aside"
+    status=$?
+    rm -f "$aside"
+    return $status
+}
+
+# own_data hands what an install script wrote as root to the package user,
+# which runs the service. Only DSM 6 runs these scripts as root; as the
+# package user there is nothing to hand over. Every chown is -h, and the
+# named files are handed over only when plain_file: a link or a hard link
+# planted there to a root-owned file elsewhere would otherwise be handed over
+# with it. The data tree itself is the service's to write, so it is re-owned
+# only when it belongs to someone else (a reinstall whose package user got a
+# new uid), and then under the same rule. The "/." suffix matters: on DSM 7
+# var is a link to @appdata, and chown on the bare link changes only the
+# link.
+own_data() {
+    [ "$(id -u)" = "0" ] || return 0
+    U=$(id -un "$PKG" 2>/dev/null || echo "")
+    [ -n "$U" ] || return 0
+    [ -d "$VAR/." ] && chown -h "$U" "$VAR/." 2>/dev/null
+    for f in "$VAR/hyperdrop.conf" "$VAR/admin-password.seed" "$VAR/admin-user.seed" "$VAR/address-request"; do
+        plain_file "$f" && chown -h "$U" "$f" 2>/dev/null
+    done
+    # shellcheck disable=SC2012 # one directory, and ls is on every DSM
+    owner=$(ls -ld "$VAR/data" 2>/dev/null | awk '{print $3}')
+    if [ -n "$owner" ] && [ "$owner" != "$U" ]; then
+        find "$VAR/." -xdev ! -type l \( -type d -o -links 1 \) -exec chown -h "$U" {} \; 2>/dev/null
+    fi
+    return 0
+}
+
+if ! data_dir && [ -z "${COMMON_OPTIONAL_VAR:-}" ]; then
+    if [ "$DSM_MAJOR" = "6" ]; then
+        echo "cannot tell which volume holds the package" >&2
+    else
+        echo "SYNOPKG_PKGVAR is not set" >&2
+    fi
+    exit 1
+fi
