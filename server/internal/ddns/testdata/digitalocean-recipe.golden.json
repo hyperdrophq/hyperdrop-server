@@ -1,0 +1,68 @@
+{
+  "mode": "custom",
+  "domain": "share.example.com",
+  "provider": "digitalocean",
+  "providerZone": "example.com",
+  "recipeVersion": 1,
+  "secrets": {
+    "digitalocean_token": "TEST_DO_TOKEN"
+  },
+  "requests": [
+    {
+      "name": "Find share.example.com",
+      "method": "GET",
+      "url": "https://api.digitalocean.com/v2/domains/example.com/records?name=share.example.com\u0026type=A",
+      "headers": {
+        "Authorization": "Bearer {{.digitalocean_token}}"
+      },
+      "successJSON": {
+        "domain_records.0.name": "share",
+        "domain_records.0.type": "A"
+      },
+      "capture": {
+        "share_record": "domain_records.0.id"
+      }
+    },
+    {
+      "name": "Update share.example.com",
+      "method": "PATCH",
+      "url": "https://api.digitalocean.com/v2/domains/example.com/records/{{.share_record}}",
+      "headers": {
+        "Authorization": "Bearer {{.digitalocean_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"type\":\"A\",\"data\":\"{{.ipv4}}\",\"ttl\":60}",
+      "successJSON": {
+        "domain_record.type": "A"
+      }
+    },
+    {
+      "name": "Find files.share.example.com",
+      "method": "GET",
+      "url": "https://api.digitalocean.com/v2/domains/example.com/records?name=files.share.example.com\u0026type=A",
+      "headers": {
+        "Authorization": "Bearer {{.digitalocean_token}}"
+      },
+      "successJSON": {
+        "domain_records.0.name": "files.share",
+        "domain_records.0.type": "A"
+      },
+      "capture": {
+        "files_record": "domain_records.0.id"
+      }
+    },
+    {
+      "name": "Update files.share.example.com",
+      "method": "PATCH",
+      "url": "https://api.digitalocean.com/v2/domains/example.com/records/{{.files_record}}",
+      "headers": {
+        "Authorization": "Bearer {{.digitalocean_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"type\":\"A\",\"data\":\"{{.ipv4}}\",\"ttl\":60}",
+      "successJSON": {
+        "domain_record.type": "A"
+      }
+    }
+  ]
+}

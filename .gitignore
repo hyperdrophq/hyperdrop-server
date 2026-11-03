@@ -1,0 +1,4 @@
+/server/hyperdrop-server
+/platforms/synology/dist/
+__pycache__/
+.DS_Store
