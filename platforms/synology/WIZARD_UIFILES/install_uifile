@@ -1,0 +1,118 @@
+[
+  {
+    "step_title": "HyperDrop settings",
+    "invalid_next_disabled": true,
+    "activeate": "{ var p = arguments[0], f = p.getForm(), a = f.findField('wizard_address'), free = f.findField('wizard_kind_free'); var s = document.getElementById('hd-suffix'); if (!s) { s = document.createElement('span'); s.id = 'hd-suffix'; s.textContent = '.hyperdrop.link'; s.style.cssText = 'position:absolute;top:0;font-size:13px;line-height:28px;white-space:nowrap;color:#414b55;'; var host = a.el.dom.parentNode; host.style.position = 'relative'; host.appendChild(s); } var place = function(){ s.style.left = (a.el.dom.offsetLeft + a.el.dom.offsetWidth + 8) + 'px'; }; var sync = function(){ var on = free.getValue(); s.style.display = on ? '' : 'none'; a.el.dom.placeholder = on ? 'alice' : 'share.example.com'; if (a.getValue()) { a.validate(); } }; if (!p.hdBound) { var hint = function(){ a.el.dom.placeholder = free.getValue() ? 'alice' : 'share.example.com'; }; free.on('check', sync); a.on('change', hint); a.on('blur', hint); a.on('keyup', hint); p.hdBound = true; } setTimeout(function(){ place(); sync(); }, 0); }",
+    "items": [
+      {
+        "type": "textfield",
+        "desc": "The administrator account you will sign in with from the HyperDrop app.",
+        "subitems": [
+          {
+            "key": "wizard_admin_user",
+            "desc": "Admin username",
+            "defaultValue": "admin",
+            "validator": {
+              "allowBlank": false,
+              "blankText": "An admin username is required.",
+              "regex": {"expr": "/^[a-z0-9._-]{3,32}$/", "errorText": "3-32 characters of a-z, 0-9, dot, dash or underscore."}
+            }
+          }
+        ]
+      },
+      {
+        "type": "password",
+        "desc": "Its password.",
+        "subitems": [
+          {
+            "key": "wizard_admin_password",
+            "desc": "Admin password",
+            "validator": {"allowBlank": false, "blankText": "An admin password is required."}
+          }
+        ]
+      },
+      {
+        "type": "singleselect",
+        "desc": "Choose how people reach this server. A free HyperDrop address needs no DNS setup. Your own domain needs its two DNS records first (Server Management shows them).",
+        "subitems": [
+          {
+            "key": "wizard_kind_free",
+            "desc": "Free HyperDrop address",
+            "defaultValue": true
+          },
+          {
+            "key": "wizard_kind_domain",
+            "desc": "My own domain",
+            "defaultValue": false
+          }
+        ]
+      },
+      {
+        "type": "textfield",
+        "desc": "A free name like alice becomes alice.hyperdrop.link. For your own domain, type it in full, like share.example.com.",
+        "subitems": [
+          {
+            "key": "wizard_address",
+            "desc": "Address",
+            "emptyText": "alice",
+            "validator": {
+              "allowBlank": false,
+              "blankText": "Enter an address: a free name like alice, or your own domain.",
+              "fn": "{ var v = arguments[0], fld = arguments[1]; var form = fld.findParentBy(function(c){ return !!c.getForm; }); var free = form && form.getForm().findField('wizard_kind_free').getValue(); if (free) { return /^(?!.*--)[a-z0-9][a-z0-9-]{3,30}[a-z0-9]$/.test(v) ? true : '5-32 lowercase letters, digits and single hyphens, for example alice.'; } return /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(v) ? true : 'A domain name, for example share.example.com.'; }"
+            }
+          }
+        ]
+      },
+      {
+        "type": "textfield",
+        "desc": "The shared folder HyperDrop keeps its shares in. Administrators can open it in File Station.",
+        "subitems": [
+          {
+            "key": "wizard_shared_folder",
+            "desc": "Shared folder",
+            "defaultValue": "HyperDrop",
+            "validator": {
+              "allowBlank": false,
+              "blankText": "A shared folder name is required.",
+              "regex": {"expr": "/^[A-Za-z0-9_-][A-Za-z0-9 _-]{0,31}$/", "errorText": "1 to 32 letters, digits, spaces, dashes or underscores."}
+            }
+          }
+        ]
+      },
+      {
+        "type": "textfield",
+        "desc": "Listen ports on this NAS. On your router, forward port 443 to the HTTPS port, and port 80 to the HTTP port for a free address. Ports already used by DSM or another device: gethyperdrop.com/docs/synology/#ports",
+        "subitems": [
+          {
+            "key": "wizard_http_port",
+            "desc": "HTTP port",
+            "defaultValue": "5080",
+            "validator": {"regex": {"expr": "/^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$/", "errorText": "A port number from 1 to 65535."}}
+          },
+          {
+            "key": "wizard_https_port",
+            "desc": "HTTPS port",
+            "defaultValue": "5443",
+            "validator": {
+              "regex": {"expr": "/^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$/", "errorText": "A port number from 1 to 65535."},
+              "fn": "{ var v = arguments[0], fld = arguments[1]; var form = fld.findParentBy(function(c){ return !!c.getForm; }); var http = form && form.getForm().findField('wizard_http_port'); return http && String(http.getValue()) === String(v) ? 'The HTTP and HTTPS ports must differ.' : true; }"
+            }
+          }
+        ]
+      },
+      {
+        "type": "textfield",
+        "desc": "Leave empty when the router forwards straight to this NAS. Fill in only for a pass-through proxy in front of HyperDrop that sends the PROXY protocol on port 443, such as HAProxy or nginx stream: its address, 127.0.0.1 when it runs on this NAS. DSM's Reverse Proxy is not supported.",
+        "subitems": [
+          {
+            "key": "wizard_trusted_proxies",
+            "desc": "Proxy address (optional)",
+            "validator": {
+              "regex": {"expr": "/^([0-9A-Fa-f.:\\/, ]*[0-9:][0-9A-Fa-f.:\\/, ]*)?$/", "errorText": "An IP address, or several separated by commas."}
+            }
+          }
+        ]
+      }
+    ]
+  }
+]
