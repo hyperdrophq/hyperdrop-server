@@ -1,0 +1,38 @@
+{
+  "mode": "custom",
+  "domain": "share.example.com",
+  "provider": "gcore",
+  "providerZone": "example.com",
+  "recipeVersion": 1,
+  "secrets": {
+    "gcore_token": "TEST_TOKEN"
+  },
+  "requests": [
+    {
+      "name": "Update share.example.com",
+      "method": "PUT",
+      "url": "https://api.gcore.com/dns/v2/zones/example.com/share.example.com/A",
+      "headers": {
+        "Authorization": "APIKey {{.gcore_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"ttl\":120,\"resource_records\":[{\"content\":[\"{{.ipv4}}\"]}]}",
+      "successJSON": {
+        "type": "A"
+      }
+    },
+    {
+      "name": "Update files.share.example.com",
+      "method": "PUT",
+      "url": "https://api.gcore.com/dns/v2/zones/example.com/files.share.example.com/A",
+      "headers": {
+        "Authorization": "APIKey {{.gcore_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"ttl\":120,\"resource_records\":[{\"content\":[\"{{.ipv4}}\"]}]}",
+      "successJSON": {
+        "type": "A"
+      }
+    }
+  ]
+}
