@@ -1,0 +1,70 @@
+{
+  "mode": "custom",
+  "domain": "share.example.com",
+  "provider": "cloudflare",
+  "providerZone": "example.com",
+  "recipeVersion": 2,
+  "secrets": {
+    "cf_token": "TEST_TOKEN"
+  },
+  "requests": [
+    {
+      "name": "Find share.example.com",
+      "method": "GET",
+      "url": "https://api.cloudflare.com/client/v4/zones/ZONEID/dns_records?name=share.example.com\u0026type=A",
+      "headers": {
+        "Authorization": "Bearer {{.cf_token}}"
+      },
+      "successJSON": {
+        "result.0.name": "share.example.com",
+        "result.0.type": "A",
+        "success": true
+      },
+      "capture": {
+        "share_record": "result.0.id"
+      }
+    },
+    {
+      "name": "Update share.example.com",
+      "method": "PATCH",
+      "url": "https://api.cloudflare.com/client/v4/zones/ZONEID/dns_records/{{.share_record}}",
+      "headers": {
+        "Authorization": "Bearer {{.cf_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"content\":\"{{.ipv4}}\",\"ttl\":60,\"proxied\":false}",
+      "successJSON": {
+        "success": true
+      }
+    },
+    {
+      "name": "Find files.share.example.com",
+      "method": "GET",
+      "url": "https://api.cloudflare.com/client/v4/zones/ZONEID/dns_records?name=files.share.example.com\u0026type=A",
+      "headers": {
+        "Authorization": "Bearer {{.cf_token}}"
+      },
+      "successJSON": {
+        "result.0.name": "files.share.example.com",
+        "result.0.type": "A",
+        "success": true
+      },
+      "capture": {
+        "files_record": "result.0.id"
+      }
+    },
+    {
+      "name": "Update files.share.example.com",
+      "method": "PATCH",
+      "url": "https://api.cloudflare.com/client/v4/zones/ZONEID/dns_records/{{.files_record}}",
+      "headers": {
+        "Authorization": "Bearer {{.cf_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"content\":\"{{.ipv4}}\",\"ttl\":60,\"proxied\":false}",
+      "successJSON": {
+        "success": true
+      }
+    }
+  ]
+}
