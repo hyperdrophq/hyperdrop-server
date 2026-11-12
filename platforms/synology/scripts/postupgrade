@@ -1,0 +1,4 @@
+#!/bin/sh
+# Nothing to do: postinst, which an upgrade runs too, hands the data
+# directory to the package user (own_data in scripts/common).
+exit 0
