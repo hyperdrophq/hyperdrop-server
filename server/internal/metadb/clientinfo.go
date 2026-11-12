@@ -1,0 +1,77 @@
+package metadb
+
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// ClientInfo is what a client says about itself on every authenticated
+// request (X-HyperDrop-Client: "<version> <platform>"). Kept per token so an
+// admin can see which accounts run an app the server is behind.
+type ClientInfo struct {
+	Version  string
+	Platform string
+}
+
+func (c ClientInfo) Empty() bool { return c.Version == "" }
+
+var (
+	clientVersionShape  = regexp.MustCompile(`^\d{1,4}\.\d{1,5}\.\d{1,6}$`)
+	clientPlatformShape = regexp.MustCompile(`^[a-z0-9]{1,16}$`)
+)
+
+// ParseClientHeader reads the header's value; anything off-shape reads as
+// empty, so a stray proxy header never fails a request or lands in a row.
+func ParseClientHeader(value string) ClientInfo {
+	version, platform, ok := strings.Cut(strings.TrimSpace(value), " ")
+	if !ok || !clientVersionShape.MatchString(version) || !clientPlatformShape.MatchString(platform) {
+		return ClientInfo{}
+	}
+	return ClientInfo{Version: version, Platform: platform}
+}
+
+// versionKey orders "MAJOR.MINOR.PATCH" numerically; a malformed string
+// sorts first.
+func versionKey(v string) [3]int {
+	var out [3]int
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) != 3 {
+		return out
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return [3]int{}
+		}
+		out[i] = n
+	}
+	return out
+}
+
+func versionLess(a, b string) bool {
+	ka, kb := versionKey(a), versionKey(b)
+	for i := range 3 {
+		if ka[i] != kb[i] {
+			return ka[i] < kb[i]
+		}
+	}
+	return false
+}
+
+// LatestClient is the token whose client version is greatest, ties going
+// to the most recently used; ok is false when no token reported one.
+func (u User) LatestClient() (Token, bool) {
+	var best Token
+	ok := false
+	for _, t := range u.Tokens {
+		if t.ClientVersion == "" {
+			continue
+		}
+		if !ok || versionLess(best.ClientVersion, t.ClientVersion) ||
+			(best.ClientVersion == t.ClientVersion && t.LastUsedAt.After(best.LastUsedAt)) {
+			best, ok = t, true
+		}
+	}
+	return best, ok
+}

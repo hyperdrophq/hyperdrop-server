@@ -1,0 +1,3 @@
+#!/bin/sh
+# DSM stops the service itself before uninstall; nothing to do.
+exit 0
