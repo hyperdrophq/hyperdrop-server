@@ -1,0 +1,38 @@
+{
+  "mode": "custom",
+  "domain": "share.example.com",
+  "provider": "hetzner",
+  "providerZone": "example.com",
+  "recipeVersion": 1,
+  "secrets": {
+    "hetzner_token": "TEST_TOKEN"
+  },
+  "requests": [
+    {
+      "name": "Update share.example.com",
+      "method": "POST",
+      "url": "https://api.hetzner.cloud/v1/zones/example.com/rrsets/share/A/actions/set_records",
+      "headers": {
+        "Authorization": "Bearer {{.hetzner_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"records\":[{\"value\":\"{{.ipv4}}\"}]}",
+      "successJSON": {
+        "action.error": null
+      }
+    },
+    {
+      "name": "Update files.share.example.com",
+      "method": "POST",
+      "url": "https://api.hetzner.cloud/v1/zones/example.com/rrsets/files.share/A/actions/set_records",
+      "headers": {
+        "Authorization": "Bearer {{.hetzner_token}}",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"records\":[{\"value\":\"{{.ipv4}}\"}]}",
+      "successJSON": {
+        "action.error": null
+      }
+    }
+  ]
+}

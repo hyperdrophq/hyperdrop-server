@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{template "favicon"}}
+<title>{{.Title}}</title>
+<meta name="robots" content="noindex">
+<style>
+  :root {
+    {{template "brandTokens"}}
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #F2F2F7; --paper: #161618; --hairline: #3A3A3C; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, system-ui, "Segoe UI", sans-serif;
+    max-width: 560px; margin: 0 auto; padding: 4rem 1.2rem 1rem;
+    color: var(--ink); background: var(--paper); text-align: center;
+  }
+  h1 { font-size: 1.25rem; margin: 1.2rem 0 .3rem; letter-spacing: -.01em;
+       overflow-wrap: anywhere; }
+  .note { color: var(--muted); font-size: .9rem; }
+  footer { margin-top: 4rem; padding: .9rem 0; border-top: 1px solid var(--hairline);
+           display: flex; align-items: center; justify-content: center; gap: .45rem;
+           color: var(--muted); font-size: .8rem; }
+  footer strong { color: var(--ink); }
+  footer strong a { color: inherit; text-decoration: none; }
+  footer strong a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<main class="card">
+  {{template "mark" 44}}
+  <h1>{{.Title}}</h1>
+  <p class="note">This folder is not available on this server right now. The person sharing it can put it back or remove the share.</p>
+</main>
+<footer>{{template "mark" 14}}<span>Shared with <strong><a class="brand-link" href="https://gethyperdrop.com" rel="noopener">HyperDrop</a></strong></span></footer>
+</body>
+</html>
