@@ -1,0 +1,41 @@
+{
+  "mode": "custom",
+  "domain": "share.example.com",
+  "provider": "porkbun",
+  "providerZone": "example.com",
+  "recipeVersion": 1,
+  "secrets": {
+    "porkbun_apikey": "TEST_APIKEY",
+    "porkbun_secretapikey": "TEST_SECRETAPIKEY"
+  },
+  "requests": [
+    {
+      "name": "Update share.example.com",
+      "method": "POST",
+      "url": "https://api.porkbun.com/api/json/v3/dns/editByNameType/example.com/A/share",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-API-Key": "{{.porkbun_apikey}}",
+        "X-Secret-API-Key": "{{.porkbun_secretapikey}}"
+      },
+      "body": "{\"content\":\"{{.ipv4}}\",\"ttl\":600}",
+      "successJSON": {
+        "status": "SUCCESS"
+      }
+    },
+    {
+      "name": "Update files.share.example.com",
+      "method": "POST",
+      "url": "https://api.porkbun.com/api/json/v3/dns/editByNameType/example.com/A/files.share",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-API-Key": "{{.porkbun_apikey}}",
+        "X-Secret-API-Key": "{{.porkbun_secretapikey}}"
+      },
+      "body": "{\"content\":\"{{.ipv4}}\",\"ttl\":600}",
+      "successJSON": {
+        "status": "SUCCESS"
+      }
+    }
+  ]
+}
