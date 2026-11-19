@@ -1,0 +1,380 @@
+package metadb
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"hyperdrop/server/internal/shareid"
+)
+
+// OwnerUsage is one account's counters, read straight from owner_stats.
+type OwnerUsage struct {
+	Shares, Committed int
+	Bytes             int64
+}
+
+// Usage reports an owner's counters. An owner with no shares yet, or no such
+// owner at all, reads as the zero value.
+func (db *DB) Usage(owner string) (u OwnerUsage, err error) {
+	err = db.read(func(tx *sql.Tx) error {
+		err := tx.QueryRow(`SELECT shares, committed, bytes FROM owner_stats WHERE owner = ?`, owner).Scan(&u.Shares, &u.Committed, &u.Bytes)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	})
+	return
+}
+
+// Totals sums owner_stats across every account, for the server-wide page.
+func (db *DB) Totals() (shares int, bytes int64, err error) {
+	err = db.read(func(tx *sql.Tx) error {
+		return tx.QueryRow(`SELECT coalesce(sum(shares),0), coalesce(sum(bytes),0) FROM owner_stats`).Scan(&shares, &bytes)
+	})
+	return
+}
+
+// emptyShareCond is the WHERE fragment, over the shares row aliased d, that
+// holds for a stored share still waiting for its first byte past the grace
+// period; its one argument is the cutoff in nanoseconds. Its first two terms
+// are shares_empty's own condition, which is what lets a query read through
+// that index. A duplicate still copying (copying_from) is its worker's: a
+// slow copy can hold no committed file past the grace period.
+const emptyShareCond = `d.committed = 0 AND d.inbox = 0 AND d.created_at < ?
+	AND d.copying_from IS NULL
+	AND NOT EXISTS (SELECT 1 FROM share_sources s WHERE s.share_id = d.id)
+	AND NOT EXISTS (SELECT 1 FROM folders f WHERE f.share_id = d.id)`
+
+// EmptyShares reads through shares_empty, the partial index holding exactly the
+// shares that are still waiting for their first byte, so the sweep costs its
+// answer rather than the table. It lists stored shares that never received a byte and are past the
+// grace period. Inboxes wait for senders and linked shares hold no uploads by
+// design, so both are excluded, and so is a share holding a folder record,
+// which is a share being built folder first, and a duplicate still copying.
+func (db *DB) EmptyShares(olderThan time.Time) (ids []string, err error) {
+	err = db.read(func(tx *sql.Tx) error {
+		ids, err = queryStrings(tx, `SELECT id FROM shares d INDEXED BY shares_empty
+			WHERE `+emptyShareCond+` ORDER BY created_at`, toNS(olderThan))
+		return err
+	})
+	return
+}
+
+// RemovePending removes a pending row the stalled sweep gave up on. A row that
+// committed meanwhile is untouched, and the call reports nothing to do.
+func (db *DB) RemovePending(shareID, path string) error {
+	if !shareid.ValidID(shareID) {
+		return ErrNotFound
+	}
+	return db.commit(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM files WHERE share_id = ? AND path = ? AND pending = 1`, shareID, path)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil
+		}
+		if err := clearDanglingEntry(tx, shareID); err != nil {
+			return err
+		}
+		h, err := readHead(tx, shareID)
+		if err != nil {
+			return err
+		}
+		return recordChange(tx, h.owner, shareID, false, time.Now())
+	})
+}
+
+// Check runs SQLite's integrity check and reports anything but "ok". When
+// the check finds the file damaged (a verdict other than "ok", or SQLite's
+// own corruption codes) it also leaves CheckOwedFile, as a damaged backup
+// copy does, so the next serving open checks the file rather than trust a
+// clean close's record over damage the check has shown; while a server
+// serves the file the marker only makes its next start check.
+func (db *DB) Check() error {
+	var lines []string
+	err := db.read(func(tx *sql.Tx) (err error) {
+		lines, err = queryStrings(tx, `PRAGMA integrity_check`)
+		return err
+	})
+	if err != nil {
+		if isCorruptionError(err) {
+			db.markCheckOwed(time.Now(), err)
+		}
+		return err
+	}
+	if len(lines) != 1 || lines[0] != "ok" {
+		err := fmt.Errorf("integrity_check: %s", strings.Join(lines, "; "))
+		db.markCheckOwed(time.Now(), err)
+		return err
+	}
+	return nil
+}
+
+// Optimize lets SQLite refresh its planner statistics; housekeeping calls it.
+func (db *DB) Optimize() error {
+	return db.write(func(tx *sql.Tx) error { _, err := tx.Exec(`PRAGMA optimize`); return err })
+}
+
+// PendingRef names one pending file row, for the stalled-upload sweep.
+type PendingRef struct {
+	ShareID, Path string
+	DeclaredAt    time.Time
+}
+
+// ShareIDs lists every share id, ascending. The boot pass compares it against
+// the directories under shares/.
+func (db *DB) ShareIDs() (ids []string, err error) {
+	err = db.read(func(tx *sql.Tx) error {
+		ids, err = queryStrings(tx, `SELECT id FROM shares ORDER BY id`)
+		return err
+	})
+	return
+}
+
+// PendingFiles lists at most limit of the pending rows declared before
+// olderThan and after the row after names, in (declared_at, share_id, path)
+// order, through the files_pending partial index: the stalled-upload
+// sweep's candidates, so a server with no upload in flight reads a few index
+// pages and no disk, and one holding more pending rows than a pass should
+// touch answers a page and leaves the rest to the next, which continues
+// after the last row this one answered. A zero after starts at the oldest.
+// A duplicate still copying (copying_from set) is left out: its rows wait on
+// the copy worker rather than a client, and the boot pass removes a copy no
+// worker will finish.
+func (db *DB) PendingFiles(olderThan time.Time, after PendingRef, limit int) (refs []PendingRef, err error) {
+	err = db.read(func(tx *sql.Tx) error {
+		rows, err := tx.Query(`SELECT share_id, path, declared_at FROM files INDEXED BY files_pending
+			WHERE pending = 1 AND declared_at < ? AND (declared_at, share_id, path) > (?, ?, ?)
+			AND NOT EXISTS (SELECT 1 FROM shares s WHERE s.id = files.share_id AND s.copying_from IS NOT NULL)
+			ORDER BY declared_at, share_id, path LIMIT ?`,
+			toNS(olderThan), toNS(after.DeclaredAt), after.ShareID, after.Path, limit)
+		if err != nil {
+			return err
+		}
+		return eachRow(rows, func() error {
+			var r PendingRef
+			var ns int64
+			if err := rows.Scan(&r.ShareID, &r.Path, &ns); err != nil {
+				return err
+			}
+			r.DeclaredAt = fromNS(ns)
+			refs = append(refs, r)
+			return nil
+		})
+	})
+	return
+}
+
+// deleteShareIf removes the share and everything under it only while cond (a
+// WHERE fragment over the shares row, aliased d) still holds, and records the
+// deletion, in one write transaction (deleteShareIfTx). It answers false,
+// without error, when the share is gone or the condition no longer holds:
+// the sweep that asked read a snapshot, and an edit or an upload may have
+// landed since.
+func (db *DB) deleteShareIf(id, cond string, args ...any) (deleted bool, err error) {
+	if !shareid.ValidID(id) {
+		return false, nil
+	}
+	err = db.commit(func(tx *sql.Tx) error {
+		ok, err := deleteShareIfTx(tx, id, cond, args...)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errNothingToDelete
+		}
+		deleted = true
+		return nil
+	})
+	if errors.Is(err, errNothingToDelete) {
+		return false, nil
+	}
+	return deleted, err
+}
+
+// deleteShareIfTx is one share's conditional delete inside tx: it re-tests
+// cond against the shares row, deletes the share (the cascade takes
+// everything under it) and records the deletion in the journal. cond is
+// spliced into the statement, so it is always a package constant and never
+// caller input; its values travel as args. It answers false, writing
+// nothing, when the share is gone, the id is not a share id, or the
+// condition no longer holds.
+func deleteShareIfTx(tx *sql.Tx, id, cond string, args ...any) (bool, error) {
+	if !shareid.ValidID(id) {
+		return false, nil
+	}
+	var owner string
+	err := tx.QueryRow(`SELECT d.owner FROM shares d WHERE d.id = ? AND (`+cond+`)`, append([]any{id}, args...)...).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(`DELETE FROM shares WHERE id = ?`, id); err != nil {
+		return false, err
+	}
+	return true, recordChange(tx, owner, id, true, time.Now())
+}
+
+// errNothingToDelete rolls a conditional delete back without reporting a
+// failure to the caller.
+var errNothingToDelete = errors.New("nothing to delete")
+
+// expiredCond is the expiry re-check every expired share's delete runs
+// inside its transaction.
+const expiredCond = `d.expires_at IS NOT NULL AND d.expires_at < ?`
+
+// DeleteExpiredShare deletes the share if its expiry is still before now. The
+// caller removes the directory afterwards when it answers true.
+func (db *DB) DeleteExpiredShare(id string, now time.Time) (bool, error) {
+	return db.deleteShareIf(id, expiredCond, toNS(now))
+}
+
+// ExpiredBatchBudget and ExpiredBatchMax bound one DeleteExpiredShares
+// transaction: no share is added to a batch once the budget has passed
+// since the batch began or the batch holds the max, so a write queued
+// behind the expiry sweep waits for at most one batch, the budget plus the
+// last share's own delete. Variables so a test can change them.
+var (
+	ExpiredBatchBudget = 50 * time.Millisecond
+	ExpiredBatchMax    = 500
+)
+
+// DeleteExpiredShares judges ids in order inside one write transaction,
+// each with its own expiry re-check and journal row (deleteShareIfTx), until
+// the budget or the max (ExpiredBatchBudget, ExpiredBatchMax); at least one
+// id is judged whenever ids holds one. It answers the ids whose rows went,
+// in order, and how many of ids it judged, so the caller continues at
+// ids[judged:]. An id that is not a share id, a share already gone and a
+// share whose expiry moved past now are judged and kept. The batch commits
+// once and wakes the change watchers once; it writes nothing when no share
+// went. An error rolls the whole batch back: deleted is then empty and
+// judged still counts the ids the batch reached. The caller removes the
+// deleted shares' directories afterwards.
+func (db *DB) DeleteExpiredShares(ids []string, now time.Time) (deleted []string, judged int, err error) {
+	if len(ids) == 0 {
+		return nil, 0, nil
+	}
+	var batch []string
+	err = db.commit(func(tx *sql.Tx) error {
+		start := time.Now()
+		for _, id := range ids {
+			if judged > 0 && (judged >= ExpiredBatchMax || time.Since(start) >= ExpiredBatchBudget) {
+				break
+			}
+			judged++
+			ok, err := deleteShareIfTx(tx, id, expiredCond, toNS(now))
+			if err != nil {
+				return fmt.Errorf("%s: %w", id, err)
+			}
+			if ok {
+				batch = append(batch, id)
+			}
+		}
+		if len(batch) == 0 {
+			return errNothingToDelete
+		}
+		return nil
+	})
+	if errors.Is(err, errNothingToDelete) {
+		return nil, judged, nil
+	}
+	if err != nil {
+		return nil, judged, err
+	}
+	return batch, judged, nil
+}
+
+// DeleteEmptyShare deletes the share if it still holds no committed file, is
+// not an inbox, has no sources, no folder records, and was created before
+// olderThan. Pending rows do not keep it: the stalled sweep runs first and
+// has already removed the dead ones, and the caller keeps a share whose
+// staging is still fresh before asking.
+func (db *DB) DeleteEmptyShare(id string, olderThan time.Time) (bool, error) {
+	return db.deleteShareIf(id, emptyShareCond, toNS(olderThan))
+}
+
+// storedFileBatch is how many rows EachStoredFile reads per transaction, so a
+// walk over a big volume never holds one read open for its whole length.
+const storedFileBatch = 1000
+
+// EachStoredFile calls fn for every committed file row (pending uploads are
+// not stored files yet), in primary-key order, a batch per read transaction.
+// It stops at the first error fn returns.
+func (db *DB) EachStoredFile(fn func(shareID, relPath string) error) error {
+	type ref struct{ share, path string }
+	var after ref
+	for {
+		var batch []ref
+		err := db.read(func(tx *sql.Tx) error {
+			rows, err := tx.Query(`SELECT share_id, path FROM files
+				WHERE pending = 0 AND (share_id, path) > (?, ?)
+				ORDER BY share_id, path LIMIT ?`, after.share, after.path, storedFileBatch)
+			if err != nil {
+				return err
+			}
+			return eachRow(rows, func() error {
+				var r ref
+				if err := rows.Scan(&r.share, &r.path); err != nil {
+					return err
+				}
+				batch = append(batch, r)
+				return nil
+			})
+		})
+		if err != nil {
+			return err
+		}
+		for _, r := range batch {
+			if err := fn(r.share, r.path); err != nil {
+				return err
+			}
+		}
+		if len(batch) < storedFileBatch {
+			return nil
+		}
+		after = batch[len(batch)-1]
+	}
+}
+
+// EachShareOwner calls fn with every share's id and owner. Rows arrive in
+// batches read one transaction at a time, so fn may do slow work without holding
+// a read open, and a share deleted meanwhile may or may not be seen.
+func (db *DB) EachShareOwner(fn func(id, owner string) error) error {
+	type ref struct{ id, owner string }
+	after := ""
+	for {
+		var batch []ref
+		err := db.read(func(tx *sql.Tx) error {
+			rows, err := tx.Query(`SELECT id, owner FROM shares WHERE id > ? ORDER BY id LIMIT ?`, after, storedFileBatch)
+			if err != nil {
+				return err
+			}
+			return eachRow(rows, func() error {
+				var r ref
+				if err := rows.Scan(&r.id, &r.owner); err != nil {
+					return err
+				}
+				batch = append(batch, r)
+				return nil
+			})
+		})
+		if err != nil {
+			return err
+		}
+		for _, r := range batch {
+			if err := fn(r.id, r.owner); err != nil {
+				return err
+			}
+		}
+		if len(batch) < storedFileBatch {
+			return nil
+		}
+		after = batch[len(batch)-1].id
+	}
+}

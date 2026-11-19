@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" role="img" aria-label="HyperDrop">
+  <!-- The tab mark: website/icon.svg's glyph in black on a white square, and in
+       white on a black square when the browser is in dark mode. The colours are
+       attributes so the light version still draws where a Content-Security-Policy
+       drops the style element. The site, the names registry and every HyperDrop
+       server serve these bytes (the registry and the server at /icon.svg);
+       favicon.ico is this drawing's light version (make-icons.sh). -->
+  <style>@media (prefers-color-scheme: dark) { rect { fill: #000 } path { fill: #fff } }</style>
+  <rect width="640" height="640" fill="#fff"/>
+  <path fill="#000" d="M416.82 187.3L510.1 187.3L566.7 274.18L416.5 452.7L291.87 452.7L318.01 421.52L401.98 421.52L527.95 271.81L493.2 218.48L431.4 218.48L364.46 298.68L254.51 298.68L280.93 267.5L349.87 267.5Z"/>
+  <path fill="#000" d="M223.5 187.3L348.13 187.3L322.06 218.48L238.02 218.48L112.05 368.19L146.8 421.52L208.6 421.52L275.54 341.32L385.38 341.32L359.11 372.5L290.13 372.5L223.18 452.7L129.9 452.7L73.3 365.82Z"/>
+</svg>

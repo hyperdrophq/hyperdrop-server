@@ -1,0 +1,398 @@
+package metadb
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	sqlite3 "modernc.org/sqlite/lib"
+
+	"hyperdrop/server/internal/fsatomic"
+)
+
+// KeepBackups bounds the backup directory: the newest this many copies stay.
+const KeepBackups = 3
+
+// RecoveredMarker is the file the data directory holds after a boot restored
+// the database from a backup, until an operator restarts once or a week
+// passes; /api/usage's health verdict reads it.
+const RecoveredMarker = "recovered.json"
+
+// ErrNoUsableDatabase is what Open answers when the database fails its
+// check and no backup passes it. The damaged file stays where it is, so the
+// next boot meets the same refusal: an empty database over a directory that
+// held one is the one outcome worse than a stopped service.
+var ErrNoUsableDatabase = errors.New("the database is damaged and no usable backup exists: it is left in place for an operator")
+
+// errCorrupt wraps a quick_check verdict or SQLite's own corruption codes,
+// the only failures that move a database aside. A file that cannot be
+// opened or read is refused as it is.
+var errCorrupt = errors.New("database is damaged")
+
+// Recovered records one boot-time restore. At is when it ran (the marker's
+// age); BackupAt is the restored copy's own time, which is what the owner
+// needs: shares made after it are the ones to share again.
+type Recovered struct {
+	At       time.Time `json:"at"`
+	BackupAt time.Time `json:"backupAt"`
+	Backup   string    `json:"backup"`  // the copy restored, by path
+	Corrupt  string    `json:"corrupt"` // where the damaged file was moved
+}
+
+// backupTimeLayout names a copy by its UTC time; BackupTime reads it back.
+const backupTimeLayout = "20060102T150405Z"
+
+func backupName(dir string, at time.Time) string {
+	return filepath.Join(dir, "hyperdrop-"+at.UTC().Format(backupTimeLayout)+".db")
+}
+
+// BackupTime answers the time a copy's name carries; zero for another name.
+func BackupTime(path string) time.Time {
+	base := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "hyperdrop-"), ".db")
+	t, err := time.Parse(backupTimeLayout, base)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// ErrCopyDamaged is what Backup answers when the finished copy fails its
+// check, or when SQLite reports the live file damaged while the copy reads
+// it. The copy holds the live file's own pages, so the damage is the live
+// file's: the copy is removed, the older copies stay, and the data
+// directory gains CheckOwedFile.
+var ErrCopyDamaged = errors.New("the database copy failed its check")
+
+// CheckOwedFile is the marker a damaged copy leaves in the data directory,
+// {"at":…, "reason":…}, at the backup's time: the live database owes a
+// check. A serving open whose check passes removes it.
+const CheckOwedFile = "check-owed"
+
+// beforeBackupCopy, when set, runs on the copy's connection just before the
+// copy starts: the tests' seam for writing or cancelling while a backup is
+// under way.
+var beforeBackupCopy func()
+
+// Backup writes a consistent copy of the database to
+// <dir>/hyperdrop-<UTC time>.db and prunes the directory to KeepBackups.
+// The copy is VACUUM INTO on a read-pool connection (copyTo): one read
+// snapshot, so writers are never held back and nothing they commit
+// meanwhile reaches the copy, and only the content the database holds now,
+// so the copy carries no free pages and none of the deleted content the
+// live file keeps in freed space. It is written as a part file (one an
+// earlier backup left is removed first), checked with quick_check, made
+// durable and only then renamed into place, and only then are older copies
+// pruned. A copy that fails its check, or meets SQLite's own corruption
+// codes while it reads the live file, answers ErrCopyDamaged and leaves
+// CheckOwedFile; a cancelled ctx answers its error. Either way the part
+// file is removed and the copies stay as they were. One backup runs at a
+// time; another waits for it.
+func Backup(ctx context.Context, db *DB, dir string, now time.Time) (string, error) {
+	db.backupMu.Lock()
+	defer db.backupMu.Unlock()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	removeParts(dir)
+	name := backupName(dir, now)
+	tmp := name + ".part"
+	// The copy is written into an empty file it is given, which keeps it
+	// owner-only like the database it copies.
+	if err := createOwnerOnly(tmp); err != nil {
+		return "", err
+	}
+	if err := db.copyTo(ctx, tmp); err != nil {
+		removePart(tmp)
+		if isCorruptionError(err) {
+			return "", db.copyDamaged(now, fmt.Errorf("%w: copying: %w", errCorrupt, err))
+		}
+		return "", fmt.Errorf("backup: %w", err)
+	}
+	if err := quickCheck(tmp); err != nil {
+		removePart(tmp)
+		if errors.Is(err, errCorrupt) {
+			return "", db.copyDamaged(now, err)
+		}
+		return "", fmt.Errorf("backup: checking the copy: %w", err)
+	}
+	if err := syncFile(tmp); err != nil {
+		removePart(tmp)
+		return "", fmt.Errorf("backup: %w", err)
+	}
+	if err := os.Rename(tmp, name); err != nil {
+		removePart(tmp)
+		return "", err
+	}
+	syncDir(dir)
+	all := backups(dir)
+	for _, old := range all[:max(0, len(all)-KeepBackups)] {
+		os.Remove(old)
+	}
+	return name, nil
+}
+
+// copyTo writes the database into the empty file at path with VACUUM INTO
+// on a read-pool connection, which reads under one snapshot of its own and
+// writes only live content; a cancelled ctx interrupts it. VACUUM refuses
+// to run inside a transaction, so this is the one read that bypasses
+// db.read. The finished copy is switched to a rollback journal, so it is one
+// plain file that opens without -wal or -shm companions.
+func (db *DB) copyTo(ctx context.Context, path string) error {
+	conn, err := db.r.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if beforeBackupCopy != nil {
+		beforeBackupCopy()
+	}
+	if _, err := conn.ExecContext(ctx, `VACUUM INTO ?`, path); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	c, err := sql.Open("sqlite", fileURI(path))
+	if err != nil {
+		return err
+	}
+	_, err = c.ExecContext(context.WithoutCancel(ctx), `PRAGMA journal_mode=DELETE`)
+	return errors.Join(err, c.Close())
+}
+
+// partPattern matches a copy being written and the journal SQLite keeps
+// beside it while it writes.
+const partPattern = "hyperdrop-*.db.part*"
+
+// removeParts removes every part file in dir: what a backup cut short by a
+// crash left behind, which no boot reads.
+func removeParts(dir string) {
+	parts, _ := filepath.Glob(filepath.Join(dir, partPattern))
+	for _, p := range parts {
+		os.Remove(p)
+	}
+}
+
+// removePart removes one part file and its journal.
+func removePart(tmp string) {
+	for _, suffix := range []string{"", "-journal", "-wal", "-shm"} {
+		os.Remove(tmp + suffix)
+	}
+}
+
+// copyDamaged records the damage a copy showed (markCheckOwed) and answers
+// ErrCopyDamaged wrapping it.
+func (db *DB) copyDamaged(now time.Time, damage error) error {
+	db.markCheckOwed(now, damage)
+	return fmt.Errorf("%w: %w", ErrCopyDamaged, damage)
+}
+
+// markCheckOwed records in the data directory that the live database owes
+// a check, since now, and why. A marker that cannot be written is logged:
+// the error the caller answers carries the damage either way.
+func (db *DB) markCheckOwed(now time.Time, reason error) {
+	data, _ := json.Marshal(struct {
+		At     time.Time `json:"at"`
+		Reason string    `json:"reason"`
+	}{now.UTC(), reason.Error()})
+	if err := fsatomic.Write(filepath.Join(db.dataDir, CheckOwedFile), data); err != nil {
+		log.Printf("database: recording that a check is owed: %v", err)
+	}
+}
+
+// syncFile flushes path's bytes to the disk. It opens the file for writing:
+// Windows refuses to flush a handle opened read-only.
+func syncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	return errors.Join(err, f.Close())
+}
+
+// syncDir makes a rename in dir durable. A failed sync leaves a whole file
+// under one name or the other, so it is not an error.
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+}
+
+// backups lists the directory's copies oldest first; the names sort by time.
+func backups(dir string) []string {
+	names, _ := filepath.Glob(filepath.Join(dir, "hyperdrop-*.db"))
+	sort.Strings(names)
+	return names
+}
+
+// NewestBackup answers the newest copy's path, or "" with none.
+func NewestBackup(dir string) string {
+	all := backups(dir)
+	if len(all) == 0 {
+		return ""
+	}
+	return all[len(all)-1]
+}
+
+// quickCheck opens the file read-only and runs PRAGMA quick_check. A file
+// that does not exist passes: there is nothing to check. A damaged file
+// answers errCorrupt; a file that cannot be opened or read answers that
+// error, which is not a reason to move it.
+func quickCheck(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil
+	}
+	db, err := sql.Open("sqlite", fileURI(path)+"?mode=ro")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var lines []string
+	rows, err := db.Query(`PRAGMA quick_check`)
+	if err == nil {
+		lines, err = scanStrings(rows)
+	}
+	if err != nil {
+		if isCorruptionError(err) {
+			return fmt.Errorf("%w: %v", errCorrupt, err)
+		}
+		return fmt.Errorf("quick_check: %w", err)
+	}
+	if len(lines) != 1 || lines[0] != "ok" {
+		return fmt.Errorf("%w: quick_check: %s", errCorrupt, strings.Join(lines, "; "))
+	}
+	return nil
+}
+
+// isCorruptionError recognises SQLite's own verdicts on a damaged file,
+// SQLITE_CORRUPT and SQLITE_NOTADB, by their result codes.
+func isCorruptionError(err error) bool {
+	switch sqliteCode(err) & 0xff {
+	case sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB:
+		return true
+	}
+	return false
+}
+
+// recoverDatabase puts the newest backup that passes its check in place of
+// a damaged database, moving the damaged file aside first and recording the
+// restore in the marker. With no passing backup nothing moves and it answers
+// ErrNoUsableDatabase, so the next boot refuses the same way. It answers the
+// backup it restored from.
+func recoverDatabase(dataDir string, now time.Time) (restored string, err error) {
+	all := backups(filepath.Join(dataDir, "backups"))
+	chosen := ""
+	for i := len(all) - 1; i >= 0; i-- {
+		if err := quickCheck(all[i]); err != nil {
+			log.Printf("database: backup %s: %v", all[i], err)
+			continue
+		}
+		chosen = all[i]
+		break
+	}
+	if chosen == "" {
+		return "", ErrNoUsableDatabase
+	}
+	main := filepath.Join(dataDir, FileName)
+	corrupt := main + ".corrupt-" + now.UTC().Format(backupTimeLayout)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Rename(main+suffix, corrupt+suffix); err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	log.Printf("database: %s failed its check; moved to %s", main, corrupt)
+	if err := copyFile(chosen, main); err != nil {
+		return "", err
+	}
+	rec := Recovered{At: now.UTC(), BackupAt: BackupTime(chosen), Backup: chosen, Corrupt: corrupt}
+	data, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(dataDir, RecoveredMarker), data, 0o600); err != nil {
+		return "", err
+	}
+	log.Printf("database: restored from %s", chosen)
+	return chosen, nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp := dst + ".restore"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+// ReadRecovered answers the marker, and whether one exists.
+func ReadRecovered(dataDir string) (Recovered, bool) {
+	data, err := os.ReadFile(filepath.Join(dataDir, RecoveredMarker))
+	if err != nil {
+		return Recovered{}, false
+	}
+	var rec Recovered
+	if json.Unmarshal(data, &rec) != nil {
+		return Recovered{}, false
+	}
+	return rec, true
+}
+
+// ClearRecovered removes the marker.
+func ClearRecovered(dataDir string) { os.Remove(filepath.Join(dataDir, RecoveredMarker)) }
+
+// forgetJournal is what a restore does to the change journal: the rows
+// describe a timeline the restore ended, and every cursor a client holds
+// belongs to it. The journal is emptied and its sequence moved past
+// anything the old timeline could have reached (the current Unix time, far
+// above any real count), with the pruned watermark set there, so every
+// old cursor answers Reset and the walk that follows starts a fresh
+// timeline from the restored rows.
+func (db *DB) forgetJournal(now time.Time) error {
+	return db.write(func(tx *sql.Tx) error {
+		var seq sql.NullInt64
+		if err := tx.QueryRow(`SELECT seq FROM sqlite_sequence WHERE name = 'changes'`).Scan(&seq); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		head := max(seq.Int64, now.Unix())
+		if _, err := tx.Exec(`DELETE FROM changes`); err != nil {
+			return err
+		}
+		// sqlite_sequence has no unique key to upsert on.
+		if _, err := tx.Exec(`DELETE FROM sqlite_sequence WHERE name = 'changes'`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO sqlite_sequence(name, seq) VALUES('changes', ?)`, head); err != nil {
+			return err
+		}
+		return setMeta(tx, prunedKey, strconv.FormatInt(head, 10))
+	})
+}
