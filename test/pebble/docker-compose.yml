@@ -1,0 +1,22 @@
+services:
+  challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:latest
+    # -defaultIPv4 needs a real IP literal, never a hostname, and only
+    # answers queries the test has not overridden. The test registers the
+    # two names it actually validates (pair.example.com and
+    # files.pair.example.com) against the real host address at run time
+    # through the /add-a management call on :8055, so this default is a
+    # harmless catch-all and PEBBLE_CHALLTESTSRV_DEFAULT_IPV4 need not be set.
+    command: -defaultIPv6 "" -defaultIPv4 ${PEBBLE_CHALLTESTSRV_DEFAULT_IPV4:-127.0.0.1}
+    ports:
+      - "8055:8055"
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    command: -config /test/config/pebble-config.json -dnsserver challtestsrv:8053
+    depends_on:
+      - challtestsrv
+    volumes:
+      - ./pebble-config.json:/test/config/pebble-config.json:ro
+    ports:
+      - "14000:14000"
+      - "15000:15000"
