@@ -1,0 +1,409 @@
+package metadb
+
+import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"hyperdrop/server/internal/totp"
+	"hyperdrop/server/internal/volsecret"
+)
+
+const (
+	recoveryCodeCount = 10
+	recoveryCodeLen   = 10
+	recoveryAlphabet  = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+)
+
+// A recovery code is stored as recoveryKeyedPrefix and the hex of
+// HMAC-SHA256(k, SHA-256(code)), k the volume secret's subkey for
+// recoveryCodeInfo, so the database alone (a backup, a stolen copy) cannot
+// be searched for the codes it accepts. A row holding a plain hex SHA-256
+// is keyed in place by the serving open (rekeyRecoveryCodes). A server that
+// compares plain hashes (the previous release) matches no keyed row: it
+// refuses the code and spends nothing.
+const (
+	recoveryKeyedPrefix = "h1:"
+	recoveryCodeInfo    = "recovery-code"
+)
+
+// GenerateRecoveryCode returns a code like "AB2CD-EF3GH".
+func GenerateRecoveryCode() string {
+	b := make([]byte, recoveryCodeLen)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	out := make([]byte, 0, recoveryCodeLen+1)
+	for i, v := range b {
+		if i == recoveryCodeLen/2 {
+			out = append(out, '-')
+		}
+		out = append(out, recoveryAlphabet[int(v)%len(recoveryAlphabet)])
+	}
+	return string(out)
+}
+
+// NormalizeRecoveryCode strips spaces and dashes and upper-cases, so a code
+// typed with or without its dash matches.
+func NormalizeRecoveryCode(code string) string {
+	return strings.ToUpper(totp.Normalize(code))
+}
+
+// recoveryHash is the stored form of code under key.
+func recoveryHash(key []byte, code string) string {
+	sum := sha256.Sum256([]byte(NormalizeRecoveryCode(code)))
+	return keyedRecoveryHash(key, sum[:])
+}
+
+// keyedRecoveryHash keys a code's SHA-256 digest.
+func keyedRecoveryHash(key, digest []byte) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write(digest)
+	return recoveryKeyedPrefix + hex.EncodeToString(mac.Sum(nil))
+}
+
+// rekeyRecoveryCodes keys, inside the caller's transaction, every recovery
+// code a row holds as a plain hex SHA-256, and answers how many it keyed. A
+// keyed row is left alone, so it is a no-op on every later open; a row that
+// is neither form matches no code either way and is left as it is.
+func rekeyRecoveryCodes(tx *sql.Tx, key []byte) (int, error) {
+	rows, err := tx.Query(`SELECT username, sha256 FROM recovery_codes WHERE substr(sha256, 1, ?) <> ?`,
+		len(recoveryKeyedPrefix), recoveryKeyedPrefix)
+	if err != nil {
+		return 0, err
+	}
+	type plain struct{ name, hash string }
+	var found []plain
+	err = eachRow(rows, func() error {
+		var p plain
+		if err := rows.Scan(&p.name, &p.hash); err != nil {
+			return err
+		}
+		found = append(found, p)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	keyed := 0
+	for _, p := range found {
+		digest, err := hex.DecodeString(p.hash)
+		if err != nil || len(digest) != sha256.Size {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE recovery_codes SET sha256 = ? WHERE username = ? AND sha256 = ?`,
+			keyedRecoveryHash(key, digest), p.name, p.hash); err != nil {
+			return 0, fmt.Errorf("key the recovery codes of %s: %w", p.name, err)
+		}
+		keyed++
+	}
+	return keyed, nil
+}
+
+// replaceRecoveryCodes mints a fresh set and stores them keyed. The raw
+// codes exist once, in the return value.
+func (db *DB) replaceRecoveryCodes(tx *sql.Tx, name string) ([]string, error) {
+	if db.recoveryKey == nil {
+		return nil, ErrNoVolumeKey
+	}
+	if _, err := tx.Exec(`DELETE FROM recovery_codes WHERE username = ?`, name); err != nil {
+		return nil, err
+	}
+	raw := make([]string, recoveryCodeCount)
+	for i := range raw {
+		raw[i] = GenerateRecoveryCode()
+		if _, err := tx.Exec(`INSERT INTO recovery_codes(username, sha256) VALUES(?, ?)`, name, recoveryHash(db.recoveryKey, raw[i])); err != nil {
+			return nil, err
+		}
+	}
+	return raw, nil
+}
+
+// newSealedSecret generates a TOTP secret for the account name and answers it
+// in plaintext and sealed.
+func (db *DB) newSealedSecret(name string) (secret, sealed string, err error) {
+	secret, err = totp.GenerateSecret()
+	if err != nil {
+		return "", "", err
+	}
+	sealed, err = sealTOTP(db.totpKey, name, secret)
+	if err != nil {
+		return "", "", err
+	}
+	return secret, sealed, nil
+}
+
+// StartTOTP begins an enrolment: it stores a fresh secret, sealed, and
+// answers it in plaintext, the one place the plaintext leaves the server.
+func (db *DB) StartTOTP(name string) (secret string, err error) {
+	secret, sealed, err := db.newSealedSecret(name)
+	if err != nil {
+		return "", err
+	}
+	err = db.write(func(tx *sql.Tx) error {
+		u, err := scanUser(tx, name)
+		if err != nil {
+			return err
+		}
+		if u.TwoFactorEnabled() {
+			return ErrTOTPAlreadyOn
+		}
+		_, err = tx.Exec(`UPDATE users SET totp_secret = ?, totp_confirmed_at = NULL, totp_last_step = 0, totp_pending = NULL WHERE username = ?`, sealed, name)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return secret, nil
+}
+
+func (db *DB) ConfirmTOTP(name, code string, now time.Time) (codes []string, err error) {
+	err = db.write(func(tx *sql.Tx) error {
+		u, err := scanUser(tx, name)
+		if err != nil {
+			return err
+		}
+		if u.TOTPStored == "" || u.TwoFactorEnabled() {
+			return ErrTOTPNotPending
+		}
+		secret, opened, err := db.openStoredTOTP(&u)
+		if err != nil {
+			return err
+		}
+		if !opened {
+			return ErrTOTPInvalid
+		}
+		step, ok := totp.Verify(secret, code, now, u.TOTPLastStep)
+		if !ok {
+			return ErrTOTPInvalid
+		}
+		if _, err := tx.Exec(`UPDATE users SET totp_confirmed_at = ?, totp_last_step = ?, totp_pending = NULL WHERE username = ?`, toNS(secs(now)), step, name); err != nil {
+			return err
+		}
+		// An invite never spans a confirmed second factor: it dies when the
+		// factor is confirmed and again when a confirmed factor is cleared.
+		if err := clearInvite(tx, name); err != nil {
+			return err
+		}
+		codes, err = db.replaceRecoveryCodes(tx, name)
+		return err
+	})
+	return
+}
+
+// DisableTOTP turns the second factor off. Already off is not an error, so
+// an operator reset never fails.
+func (db *DB) DisableTOTP(name string) error {
+	return db.write(func(tx *sql.Tx) error { return disableTOTP(tx, name, false) })
+}
+
+// ErrIsAdmin is DisableNonAdminTOTP meeting an administrator.
+var ErrIsAdmin = errors.New("the account is an administrator")
+
+// DisableNonAdminTOTP is DisableTOTP for an account the caller read as not
+// an admin, refused with ErrIsAdmin when it is one by the time the write
+// runs: clearing an admin's factor takes the caller's step-up, which a
+// promotion landing between the read and the write must not skip.
+func (db *DB) DisableNonAdminTOTP(name string) error {
+	return db.write(func(tx *sql.Tx) error { return disableTOTP(tx, name, true) })
+}
+
+func disableTOTP(tx *sql.Tx, name string, refuseAdmin bool) error {
+	u, err := scanUser(tx, name)
+	if err != nil {
+		return err
+	}
+	if refuseAdmin && u.IsAdmin() {
+		return ErrIsAdmin
+	}
+	confirmed := u.TwoFactorEnabled()
+	if _, err := tx.Exec(`UPDATE users SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = 0 WHERE username = ?`, name); err != nil {
+		return err
+	}
+	if err := clearTOTPPending(tx, name); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM recovery_codes WHERE username = ?`, name); err != nil {
+		return err
+	}
+	if confirmed {
+		return clearInvite(tx, name)
+	}
+	return nil
+}
+
+// A replace of the authenticator is pending in users.totp_pending as
+// "<hex SHA-256 of the totp_secret it replaces>:<sealed new secret>", the
+// new secret sealed for the account as StartTOTP seals one. The account
+// keeps its confirmed factor until ConfirmTOTPReplace, so it never stands
+// without one. The previous release never names the column: it signs in by
+// totp_secret alone, and may turn the factor off and enrol another while a
+// replace is pending. The hash binds the pending value to the one secret it
+// replaces, and a totp_secret that no longer hashes to it leaves nothing
+// to confirm.
+
+// totpPendingValue is the totp_pending value of a replace of the active
+// stored secret by the sealed one.
+func totpPendingValue(active, sealed string) string {
+	return totpSecretHash(active) + ":" + sealed
+}
+
+// totpSecretHash is the hex SHA-256 of a stored secret as the row holds it.
+func totpSecretHash(stored string) string {
+	sum := sha256.Sum256([]byte(stored))
+	return hex.EncodeToString(sum[:])
+}
+
+// clearTOTPPending drops name's pending replace inside the caller's
+// transaction. A volume opened as is (the operator's reset2fa) may predate
+// the column, and then holds no pending replace to drop, so the column is
+// looked up in the volume's own schema first.
+func clearTOTPPending(tx *sql.Tx, name string) error {
+	var has int
+	if err := tx.QueryRow(`SELECT count(*) FROM pragma_table_info('users') WHERE name = 'totp_pending'`).Scan(&has); err != nil {
+		return err
+	}
+	if has == 0 {
+		return nil
+	}
+	_, err := tx.Exec(`UPDATE users SET totp_pending = NULL WHERE username = ?`, name)
+	return err
+}
+
+// StartTOTPReplace begins replacing a confirmed factor's authenticator: it
+// stores a fresh secret, sealed, as the pending replace (a second start
+// overwrites the first) and answers it in plaintext. The confirmed secret
+// stays the account's factor. ErrTOTPOff when the account has no confirmed
+// factor to replace.
+func (db *DB) StartTOTPReplace(name string) (secret string, err error) {
+	secret, sealed, err := db.newSealedSecret(name)
+	if err != nil {
+		return "", err
+	}
+	err = db.write(func(tx *sql.Tx) error {
+		u, err := scanUser(tx, name)
+		if err != nil {
+			return err
+		}
+		if !u.TwoFactorEnabled() {
+			return ErrTOTPOff
+		}
+		_, err = tx.Exec(`UPDATE users SET totp_pending = ? WHERE username = ?`, totpPendingValue(u.TOTPStored, sealed), name)
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return secret, nil
+}
+
+// ConfirmTOTPReplace finishes a replace with a code of the pending secret.
+// In one write the pending secret becomes the account's factor, confirmed
+// now, its spent step the code's, the recovery codes are replaced and the
+// pending value is cleared; the new codes are answered once.
+// ErrTOTPNotPending when nothing is pending, or the pending value was
+// started against a secret the account no longer has; ErrTOTPInvalid for a
+// code the pending secret does not give.
+func (db *DB) ConfirmTOTPReplace(name, code string, now time.Time) (codes []string, err error) {
+	err = db.write(func(tx *sql.Tx) error {
+		u, err := scanUser(tx, name)
+		if err != nil {
+			return err
+		}
+		var pending sql.NullString
+		if err := tx.QueryRow(`SELECT totp_pending FROM users WHERE username = ?`, name).Scan(&pending); err != nil {
+			return err
+		}
+		bound, sealed, ok := strings.Cut(pending.String, ":")
+		if !ok || !u.TwoFactorEnabled() || bound != totpSecretHash(u.TOTPStored) {
+			return ErrTOTPNotPending
+		}
+		secret, err := openTOTP(db.totpKey, name, sealed)
+		if errors.Is(err, volsecret.ErrUnreadable) {
+			log.Printf("database: the pending second-factor secret of %s does not open under this volume's key", name)
+			return ErrTOTPNotPending
+		}
+		if err != nil {
+			return err
+		}
+		step, ok := totp.Verify(secret, code, now, 0)
+		if !ok {
+			return ErrTOTPInvalid
+		}
+		if _, err := tx.Exec(`UPDATE users SET totp_secret = ?, totp_confirmed_at = ?, totp_last_step = ?, totp_pending = NULL WHERE username = ?`,
+			sealed, toNS(secs(now)), step, name); err != nil {
+			return err
+		}
+		codes, err = db.replaceRecoveryCodes(tx, name)
+		return err
+	})
+	return
+}
+
+func (db *DB) ResetRecoveryCodes(name string) (codes []string, err error) {
+	err = db.write(func(tx *sql.Tx) error {
+		u, err := scanUser(tx, name)
+		if err != nil {
+			return err
+		}
+		if !u.TwoFactorEnabled() {
+			return ErrTOTPOff
+		}
+		codes, err = db.replaceRecoveryCodes(tx, name)
+		return err
+	})
+	return
+}
+
+// checkSecondFactor accepts a TOTP code (advancing the spent step) or one
+// unused recovery code (spending it). With 2FA off it accepts anything. A
+// stored secret that does not open matches no TOTP code, and the recovery
+// codes still answer.
+func (db *DB) checkSecondFactor(tx *sql.Tx, u *User, code string, now time.Time) error {
+	if !u.TwoFactorEnabled() {
+		return nil
+	}
+	if code == "" {
+		return ErrTOTPRequired
+	}
+	secret, opened, err := db.openStoredTOTP(u)
+	if err != nil {
+		return err
+	}
+	if opened {
+		if step, ok := totp.Verify(secret, code, now, u.TOTPLastStep); ok {
+			u.TOTPLastStep = step
+			_, err := tx.Exec(`UPDATE users SET totp_last_step = ? WHERE username = ?`, step, u.Username)
+			return err
+		}
+	}
+	if db.recoveryKey == nil {
+		return ErrTOTPInvalid
+	}
+	res, err := tx.Exec(`DELETE FROM recovery_codes WHERE username = ? AND sha256 = ?`, u.Username, recoveryHash(db.recoveryKey, code))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		u.RecoveryCodesLeft--
+		return nil
+	}
+	return ErrTOTPInvalid
+}
+
+func (db *DB) VerifySecondFactor(name, code string, now time.Time) error {
+	return db.write(func(tx *sql.Tx) error {
+		u, err := scanUser(tx, name)
+		if err != nil {
+			return err
+		}
+		return db.checkSecondFactor(tx, &u, code, now)
+	})
+}
