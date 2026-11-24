@@ -1,0 +1,64 @@
+package metadb
+
+import (
+	"database/sql"
+	"time"
+)
+
+// Times are stored as unix nanoseconds UTC. A nil *time.Time is NULL.
+
+func toNS(t time.Time) int64 { return t.UTC().UnixNano() }
+
+func toNSPtr(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return toNS(*t)
+}
+
+// nullIfEmpty is s, or NULL when s is empty.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// nullUnlessPositive is n, or NULL when n is zero or negative.
+func nullUnlessPositive(n int) any {
+	if n <= 0 {
+		return nil
+	}
+	return n
+}
+
+// fromNullInt is v as an *int, nil for NULL.
+func fromNullInt(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	n := int(v.Int64)
+	return &n
+}
+
+func fromNS(ns int64) time.Time { return time.Unix(0, ns).UTC() }
+
+func fromNSPtr(v sql.NullInt64) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := fromNS(v.Int64)
+	return &t
+}
+
+// secs truncates to whole seconds, the granularity account records use.
+func secs(t time.Time) time.Time { return t.UTC().Truncate(time.Second) }
+
+// sealedOrNull is the sealed copy to store: NULL when there is no password, so
+// a removal never leaves a copy behind.
+func sealedOrNull(sealed []byte, hash string) any {
+	if hash == "" || len(sealed) == 0 {
+		return nil
+	}
+	return sealed
+}
