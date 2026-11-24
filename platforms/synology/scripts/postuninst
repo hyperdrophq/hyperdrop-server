@@ -1,0 +1,75 @@
+#!/bin/sh
+# Data survives uninstall unless the wizard said otherwise: kept certmagic
+# state means a reinstall spends no ACME budget (5 per week per name set).
+# An upgrade runs this script too and keeps the data whatever its
+# environment holds: a terminal upgrade carries the caller's wizard_*
+# variables, and only an uninstall may act on wizard_delete_data.
+# shellcheck disable=SC2154 # wizard_delete_data comes from the uninstall wizard
+[ "$wizard_delete_data" = "true" ] || exit 0
+[ "$SYNOPKG_PKG_STATUS" = "UPGRADE" ] && exit 0
+# shellcheck disable=SC2034 # read by scripts/common
+COMMON_OPTIONAL_VAR=1
+# shellcheck source-path=SCRIPTDIR source=common
+. "$(dirname "$0")/common"
+
+# On DSM 7 the data is the shared folder, which DSM keeps after an uninstall.
+# Its contents go, the marker excepted, only when the folder holds HyperDrop's
+# marker (and the id the conf recorded, when it recorded one); the folder
+# itself stays for the admin to delete in Control Panel. The marker stays so a
+# reinstall over the emptied folder is still recognised as HyperDrop's own.
+# The shared folder's name is read before @appdata, which holds the conf, is
+# removed. When DSM has already dropped the link under the package's shares
+# directory, the folder is looked for on the volume DSM names, then on the one
+# volume holding a folder of that name. HYPERDROP_TEST_VOLUMES is the test
+# seam for the volume glob.
+if [ "$DSM_MAJOR" = "7" ] && [ -n "$VAR" ]; then
+    HYPERDROP_SHARED_FOLDER=$(conf_get HYPERDROP_SHARED_FOLDER)
+    recorded=$(conf_get HYPERDROP_DATA_ID)
+    folder=$(data_path)
+    if [ -n "$HYPERDROP_SHARED_FOLDER" ] && { [ -z "$folder" ] || [ ! -d "$folder" ]; }; then
+        folder=""
+        if [ -n "$SYNOPKG_PKGDEST_VOL" ] && [ -d "$SYNOPKG_PKGDEST_VOL/$HYPERDROP_SHARED_FOLDER" ]; then
+            folder="$SYNOPKG_PKGDEST_VOL/$HYPERDROP_SHARED_FOLDER"
+        else
+            for v in ${HYPERDROP_TEST_VOLUMES:-/volume[0-9]*}; do
+                [ -d "$v/$HYPERDROP_SHARED_FOLDER" ] || continue
+                [ -z "$folder" ] || { folder=""; break; }
+                folder="$v/$HYPERDROP_SHARED_FOLDER"
+            done
+        fi
+    fi
+    if [ -n "$folder" ] && [ -d "$folder" ] && [ -f "$folder/.hyperdrop" ]; then
+        held=$(head -n 1 "$folder/.hyperdrop")
+        if [ -z "$recorded" ] || [ "$held" = "$recorded" ]; then
+            find "$folder" -mindepth 1 -maxdepth 1 ! -name .hyperdrop -exec rm -rf {} + 2>/dev/null
+        fi
+    fi
+fi
+
+# The directory that holds the data, not a link to it: on DSM 7 VAR is
+# /var/packages/hyperdrop/var, a link into @appdata, and rm -rf on a link
+# removes only the link. DSM may hand this script no VAR at all, or a link
+# already gone, so the volume DSM names and then the one volume holding
+# @appdata/hyperdrop stand in. Only a directory named @appdata/hyperdrop is
+# ever deleted.
+real=""
+if [ -n "$VAR" ] && [ -d "$VAR" ]; then
+    real=$(readlink -f "$VAR" 2>/dev/null)
+fi
+if [ -z "$real" ] && [ -n "$SYNOPKG_PKGDEST_VOL" ] && [ -d "$SYNOPKG_PKGDEST_VOL/@appdata/$PKG" ]; then
+    real="$SYNOPKG_PKGDEST_VOL/@appdata/$PKG"
+fi
+if [ -z "$real" ]; then
+    found=""
+    for d in /volume[0-9]*/@appdata/"$PKG"; do
+        [ -d "$d" ] || continue
+        [ -z "$found" ] || { found=""; break; }
+        found="$d"
+    done
+    real="$found"
+fi
+case "$real" in
+*/@appdata/"$PKG") rm -rf "$real" ;;
+*) echo "the HyperDrop data directory was not found; nothing was deleted" >&2 ;;
+esac
+exit 0

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("hyperdrop-server-signature 3\nversion 1.0.0\narch amd64\nsha256 702689a4f1fefb4715e4314fc922f035ab121586a74c39cb17c85279940bfab6\nsignature /wYtAQ2eBbHRiADUZ2CfpPAbzrhQaiFHzvgnLRTKE7Zk9+xo4GN83YvaLgnN4JpWZE0Cj8s48Wm3uHq4BT+OAX==")

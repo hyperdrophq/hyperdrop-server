@@ -1,0 +1,14 @@
+{
+    ".url": {
+        "SYNO.SDS._ThirdParty.App.hyperdrop": {
+            "type": "url",
+            "title": "HyperDrop",
+            "desc": "HyperDrop settings",
+            "icon": "images/icon_{0}.png",
+            "url": "/webman/3rdparty/hyperdrop/index.cgi",
+            "allUsers": false,
+            "grantPrivilege": "local",
+            "advanceGrantPrivilege": true
+        }
+    }
+}

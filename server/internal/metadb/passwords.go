@@ -1,0 +1,194 @@
+package metadb
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+	"hyperdrop/server/internal/commonpw"
+	"hyperdrop/server/internal/shareid"
+)
+
+// MinPasswordBytes and MaxPasswordBytes bound a password a person chooses
+// (a new account's, an admin setting one, a password change, the DSM page's
+// admin rescue). bcrypt reads at most 72 bytes and refuses more. A chosen
+// password is also refused when commonpw lists it. A password already set is
+// never measured or looked up in that list: an account whose password
+// predates the rules signs in as before.
+const (
+	MinPasswordBytes = 8
+	MaxPasswordBytes = 72
+)
+
+var (
+	ErrPasswordTooShort = fmt.Errorf("a password needs at least %d characters", MinPasswordBytes)
+	ErrPasswordTooLong  = fmt.Errorf("a password can be at most %d bytes long", MaxPasswordBytes)
+	ErrPasswordCommon   = errors.New("this password is too common, choose another")
+)
+
+// CheckChosenPassword refuses a chosen password outside the bounds, or one
+// of the most common passwords.
+func CheckChosenPassword(pw string) error {
+	switch {
+	case len(pw) < MinPasswordBytes:
+		return ErrPasswordTooShort
+	case len(pw) > MaxPasswordBytes:
+		return ErrPasswordTooLong
+	case commonpw.Common(pw):
+		return ErrPasswordCommon
+	}
+	return nil
+}
+
+// GeneratePassword returns 16 random base58 characters.
+func GeneratePassword() string { return shareid.RandomBase58(16) }
+
+func setPassword(tx *sql.Tx, name, password string, revokeTokens bool) error {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), BcryptCost)
+	if err != nil {
+		return err
+	}
+	res, err := tx.Exec(`UPDATE users SET password_hash = ? WHERE username = ?`, string(hash), name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrUserNotFound
+	}
+	// A password change ends every link not yet collected, whatever happens to
+	// the devices: a collected link is a device token and follows revokeTokens.
+	// A volume opened as-is may predate the table and then holds no links.
+	var hasLinks int
+	if err = tx.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'device_links'`).Scan(&hasLinks); err != nil {
+		return err
+	}
+	if hasLinks > 0 {
+		if _, err = tx.Exec(`DELETE FROM device_links WHERE username = ? AND state IN (`+liveLinkStates+`)`, name); err != nil {
+			return err
+		}
+	}
+	if revokeTokens {
+		if _, err = tx.Exec(`DELETE FROM tokens WHERE username = ?`, name); err != nil {
+			return err
+		}
+	}
+	return clearInvite(tx, name)
+}
+
+// dummyHashes holds one hash per bcrypt cost, made on first use, that a
+// compare runs against to spend that cost's work on a password it does not
+// check (dummyCompare).
+var dummyHashes sync.Map // int → []byte
+
+// dummyCompare spends one bcrypt compare at cost on password.
+func dummyCompare(cost int, password string) {
+	h, ok := dummyHashes.Load(cost)
+	if !ok {
+		made, err := bcrypt.GenerateFromPassword([]byte("hyperdrop-timing-dummy"), cost)
+		if err != nil {
+			return
+		}
+		h, _ = dummyHashes.LoadOrStore(cost, made)
+	}
+	bcrypt.CompareHashAndPassword(h.([]byte), []byte(password))
+}
+
+// padCompare spends, after one compare at cost, the rest of the work one
+// compare at BcryptCost does: bcrypt's work doubles with each step of cost,
+// so a compare at c-1, then c-2, down to cost makes up the difference. A
+// wrong password at an account whose hash predates BcryptCost then takes as
+// long as one at an unknown name.
+func padCompare(cost int, password string) {
+	for c := BcryptCost - 1; c >= cost; c-- {
+		dummyCompare(c, password)
+	}
+}
+
+// Authenticate checks a password. An unknown name still costs one bcrypt
+// compare at BcryptCost, and a wrong password at a hash of a lower cost is
+// padded to it, so timing does not reveal which names exist. A right password
+// at a lower cost is hashed again at BcryptCost (rehash). Only a wrong
+// password or an unknown name is ErrBadCredentials: a database that cannot be
+// read answers its own error, so a fault is never counted or shown as a guess.
+func (db *DB) Authenticate(name, password string) (User, error) {
+	u, err := db.User(name)
+	if errors.Is(err, ErrUserNotFound) {
+		dummyCompare(BcryptCost, password)
+		return User{}, ErrBadCredentials
+	}
+	if err != nil {
+		return User{}, err
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+		if cost, err := bcrypt.Cost([]byte(u.PasswordHash)); err == nil {
+			padCompare(cost, password)
+		}
+		return User{}, ErrBadCredentials
+	}
+	if !u.Active(time.Now()) {
+		return User{}, ErrInactive
+	}
+	db.rehash(u, password)
+	return u, nil
+}
+
+// rehash replaces u's password hash with one at BcryptCost when the stored
+// one is cheaper, for the password that just matched it. It writes only the
+// hash, and only while the row still holds the hash that matched, so a
+// password set meanwhile wins; it is not a password change, so no token,
+// session, invite or sign-in code block moves. The previous release reads a
+// hash of any cost. A failure keeps the old hash, to be tried at the next
+// sign-in.
+func (db *DB) rehash(u User, password string) {
+	cost, err := bcrypt.Cost([]byte(u.PasswordHash))
+	if err != nil || cost >= BcryptCost {
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), BcryptCost)
+	if err != nil {
+		return
+	}
+	if err := db.write(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE users SET password_hash = ? WHERE username = ? AND password_hash = ?`,
+			string(hash), u.Username, u.PasswordHash)
+		return err
+	}); err != nil {
+		log.Printf("rehash password of %s: %v", u.Username, err)
+	}
+}
+
+func (db *DB) SetPassword(name, password string) error {
+	return db.write(func(tx *sql.Tx) error { return setPassword(tx, name, password, true) })
+}
+
+// SetPasswordMintingToken is SetPassword for a change made from a device:
+// every token and session of the account is revoked and a replacement
+// device token with label, signed in at signedIn, is minted, in one
+// transaction, so a failed mint leaves the old password and every token as
+// they were rather than the device signed out under a changed password.
+func (db *DB) SetPasswordMintingToken(name, password, label string, signedIn time.Time) (raw string, err error) {
+	err = db.write(func(tx *sql.Tx) error {
+		if err := setPassword(tx, name, password, true); err != nil {
+			return err
+		}
+		raw, err = insertTokenCreatedAt(tx, name, label, signedIn)
+		return err
+	})
+	return
+}
+
+func (db *DB) SetPasswordKeepingTokens(name, password string) error {
+	return db.write(func(tx *sql.Tx) error { return setPassword(tx, name, password, false) })
+}
+
+// BcryptCost is the work factor of every password hash the server makes:
+// account passwords here, share passwords in the api package. An account's
+// hash of a lower cost is made again at this one when its password next
+// matches (rehash); a share's keeps its cost until the password is set again,
+// because the share's sealed copy is bound to its hash. Tests lower it;
+// nothing on a request path writes it.
+var BcryptCost = 12
